@@ -1,7 +1,12 @@
 package ra.did;
 
-import ra.common.*;
+import ra.common.DLC;
+import ra.common.Envelope;
+import ra.common.identity.DID;
+import ra.common.messaging.MessageProducer;
 import ra.common.route.Route;
+import ra.common.service.BaseService;
+import ra.common.service.ServiceStatusListener;
 
 import java.io.FileNotFoundException;
 import java.lang.reflect.InvocationTargetException;
@@ -15,8 +20,6 @@ import java.util.logging.Logger;
 
 /**
  * Decentralized IDentifier (DID) Service
- *
- * @author objectorange
  */
 public class DIDService extends BaseService {
 
@@ -45,12 +48,7 @@ public class DIDService extends BaseService {
     private static final int MAX_CONTACTS_LIST = 100;
 
     private DID nodeDID;
-
     private DID activeIdentity;
-
-    private InfoVaultDB nodeDB;
-    private InfoVaultDB identitiesDB;
-    private InfoVaultDB contactsDB;
 
     public DIDService() {}
 
