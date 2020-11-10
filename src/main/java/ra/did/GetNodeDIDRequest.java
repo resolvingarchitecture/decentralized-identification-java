@@ -1,7 +1,7 @@
 package ra.did;
 
-import ra.common.DID;
-import ra.common.ServiceMessage;
+import ra.common.identity.DID;
+import ra.common.service.ServiceMessage;
 
 public class GetNodeDIDRequest extends ServiceMessage {
     public static final int DID_REQUIRED = 1;

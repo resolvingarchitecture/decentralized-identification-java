@@ -1,7 +1,8 @@
 package ra.did;
 
-import ra.common.Hash;
-import ra.common.ServiceMessage;
+
+import ra.common.crypto.Hash;
+import ra.common.service.ServiceMessage;
 
 public class HashRequest extends ServiceMessage {
 
