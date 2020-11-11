@@ -2,20 +2,33 @@ package ra.did;
 
 import ra.common.DLC;
 import ra.common.Envelope;
+import ra.common.InfoVault;
+import ra.common.content.JSON;
+import ra.common.crypto.Hash;
+import ra.common.file.InfoVaultFileDB;
 import ra.common.identity.DID;
 import ra.common.messaging.MessageProducer;
+import ra.common.messaging.TextMessage;
 import ra.common.route.Route;
 import ra.common.service.BaseService;
+import ra.common.service.ServiceStatus;
 import ra.common.service.ServiceStatusListener;
+import ra.keyring.AuthNRequest;
+import ra.keyring.GenerateKeyRingCollectionsRequest;
+import ra.util.HashUtil;
+import ra.util.JSONParser;
+import ra.util.JSONPretty;
 
+import java.io.File;
 import java.io.FileNotFoundException;
-import java.lang.reflect.InvocationTargetException;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.logging.Logger;
+
+import static ra.did.HashRequest.UNKNOWN_HASH_ALGORITHM;
 
 
 /**
@@ -47,8 +60,14 @@ public class DIDService extends BaseService {
     private static final int MAX_CONTACTS = 10000;
     private static final int MAX_CONTACTS_LIST = 100;
 
+    // Internal
     private DID nodeDID;
     private DID activeIdentity;
+    private InfoVaultFileDB identitiesDB;
+
+    // External
+    private InfoVaultFileDB nodesDB;
+    private InfoVaultFileDB contactsDB;
 
     public DIDService() {}
 
@@ -77,26 +96,26 @@ public class DIDService extends BaseService {
         switch(operation) {
             case OPERATION_SET_ACTIVE_IDENTITY: {
                 LOG.info("Received set active identity....");
-                String fingerprint = (String) DLC.getValue("fingerprint", e);
+                String fingerprint = (String) e.getValue("fingerprint");
                 if(fingerprint ==null) {
-                    DLC.addErrorMessage("No Fingerprint", e);
+                    e.addErrorMessage("No Fingerprint");
                     break;
                 }
-                activeIdentity = loadIdentity(fingerprint, false);
-                DLC.addEntity(activeIdentity, e);
+                activeIdentity = loadIdentity(fingerprint, false, false);
+                e.addEntity(activeIdentity);
                 break;
             }
             case OPERATION_GET_ACTIVE_IDENTITY: {
                 LOG.info("Received get active identity....");
                 if(activeIdentity !=null) {
-                    DLC.addEntity(activeIdentity, e);
+                    e.addEntity(activeIdentity);
                     break;
                 }
-                List<DID> identitiesLoaded = loadIdentities(1, MAX_IDENTITIES);
+                List<DID> identitiesLoaded = loadIdentities(1, MAX_IDENTITIES, false);
                 for(DID d : identitiesLoaded) {
                     if(DID.Status.ACTIVE == d.getStatus()) {
                         activeIdentity = d;
-                        DLC.addEntity(activeIdentity, e);
+                        e.addEntity(activeIdentity);
                         break;
                     }
                 }
@@ -107,10 +126,10 @@ public class DIDService extends BaseService {
                 int start = 0;
                 int identitiesNumber = 10; // default
                 if(DLC.getValue("identitiesStart", e)!=null) {
-                    start = Integer.parseInt((String)DLC.getValue("identitiesStart", e));
+                    start = Integer.parseInt((String)e.getValue("identitiesStart"));
                 }
                 if(DLC.getValue("identitiesNumber", e)!=null) {
-                    identitiesNumber = Integer.parseInt((String)DLC.getValue("identitiesNumber", e));
+                    identitiesNumber = Integer.parseInt((String)e.getValue("identitiesNumber"));
                     if(identitiesNumber > MAX_IDENTITIES) {
                         identitiesNumber = MAX_IDENTITIES;
                     }
@@ -123,15 +142,18 @@ public class DIDService extends BaseService {
                     identity.fromJSON(new String(i));
                     identities.add(identity);
                 }
-                DLC.addNVP("identities", identities, e);
+                e.addNVP("identities", identities);
                 break;
             }
             case OPERATION_VERIFY_IDENTITY: {
                 DID verified;
                 DID did = e.getDID();
                 LOG.info("Received verify DID request.");
-                DID didLoaded = loadIdentity(did.getPublicKey().getFingerprint(), nodeDID==null);
-                if(didLoaded != null && did.getPublicKey().getFingerprint() != null && did.getPublicKey().getFingerprint().equals(didLoaded.getPublicKey().getFingerprint())) {
+                // Node DID needs to be verified first
+                DID didLoaded = loadIdentity(did.getPublicKey().getFingerprint(), nodeDID==null, false);
+                if(didLoaded != null
+                        && did.getPublicKey().getFingerprint() != null
+                        && did.getPublicKey().getFingerprint().equals(didLoaded.getPublicKey().getFingerprint())) {
                     didLoaded.setVerified(true);
                     LOG.info("DID verification successful.");
                     verified = didLoaded;
@@ -145,12 +167,12 @@ public class DIDService extends BaseService {
             }
             case OPERATION_AUTHENTICATE: {
                 LOG.info("Received authn DID request.");
-                AuthenticateDIDRequest r = (AuthenticateDIDRequest)DLC.getData(AuthenticateDIDRequest.class,e);
+                AuthenticateDIDRequest r = (AuthenticateDIDRequest)e.getData(AuthenticateDIDRequest.class);
                 if(r == null) {
                     LOG.warning("Request required.");
                     r = new AuthenticateDIDRequest();
                     r.statusCode = AuthenticateDIDRequest.REQUEST_REQUIRED;
-                    DLC.addData(AuthenticateDIDRequest.class,r,e);
+                    e.addData(AuthenticateDIDRequest.class,r);
                     break;
                 }
                 if(r.did == null) {
@@ -168,8 +190,8 @@ public class DIDService extends BaseService {
                     r.statusCode = AuthenticateDIDRequest.DID_PASSPHRASE_REQUIRED;
                     break;
                 }
-                AuthNRequest ar = (AuthNRequest)DLC.getData(AuthNRequest.class,e);
-                GenerateKeyRingCollectionsRequest gkr = (GenerateKeyRingCollectionsRequest) DLC.getData(GenerateKeyRingCollectionsRequest.class,e);
+                AuthNRequest ar = (AuthNRequest)e.getData(AuthNRequest.class);
+                GenerateKeyRingCollectionsRequest gkr = (GenerateKeyRingCollectionsRequest) e.getData(GenerateKeyRingCollectionsRequest.class);
                 if(ar!=null && ar.identityPublicKey!=null)
                     r.did.setPublicKey(ar.identityPublicKey);
                 else if(gkr!=null && gkr.identityPublicKey!=null)
@@ -215,44 +237,44 @@ public class DIDService extends BaseService {
             }
             case OPERATION_SAVE_IDENTITY: {
                 LOG.info("Received save DID request.");
-                DID did = (DID)DLC.getData(DID.class,e);
+                DID did = (DID)e.getData(DID.class);
                 if(did!=null) {
                     e.setDID(saveIdentity(did, true, false));
                 }
                 break;
             }
             case OPERATION_AUTHENTICATE_CREATE: {
-                AuthenticateDIDRequest r = (AuthenticateDIDRequest)DLC.getData(AuthenticateDIDRequest.class,e);
+                AuthenticateDIDRequest r = (AuthenticateDIDRequest)e.getData(AuthenticateDIDRequest.class);
                 authenticateOrCreateIdentity(r);
                 break;
             }
             case OPERATION_DELETE_IDENTITY: {
-                String fingerprint = (String)DLC.getValue("fingerprint", e);
+                String fingerprint = (String)e.getValue("fingerprint");
                 Boolean success = identitiesDB.delete(DID.class.getName(), fingerprint);
-                DLC.addNVP("delete-success",success.toString(),e);
+                e.addNVP("delete-success",success.toString());
                 break;
             }
             case OPERATION_ADD_CONTACT: {
                 LOG.info("Received add Contact request.");
-                DLC.addNVP("contact", saveContact((DID)DLC.getValue("contact",e), true), e);
+                e.addNVP("contact", saveContact((DID)e.getValue("contact"), true, false));
                 break;
             }
             case OPERATION_GET_CONTACT: {
                 LOG.info("Received get Contact request.");
                 String alias = ((TextMessage) e.getMessage()).getText();
                 DID loadedDID = loadContact(alias);
-                DLC.addNVP("contact", loadedDID, e);
+                e.addNVP("contact", loadedDID);
                 break;
             }
             case OPERATION_GET_CONTACTS: {
                 LOG.info("Received get Contacts request.");
                 int start = 0;
                 int contactsNumber = 10; // default
-                if(DLC.getValue("contactsStart", e)!=null) {
-                    start = Integer.parseInt((String)DLC.getValue("contactsStart", e));
+                if(e.getValue("contactsStart")!=null) {
+                    start = Integer.parseInt((String)e.getValue("contactsStart"));
                 }
                 if(DLC.getValue("contactsNumber", e)!=null) {
-                    contactsNumber = Integer.parseInt((String)DLC.getValue("contactsNumber", e));
+                    contactsNumber = Integer.parseInt((String)e.getValue("contactsNumber"));
                     if(contactsNumber > MAX_CONTACTS_LIST) {
                         contactsNumber = MAX_CONTACTS_LIST; // 1000 is max
                     }
@@ -265,7 +287,7 @@ public class DIDService extends BaseService {
                     contact.fromJSON(new String(c));
                     contacts.add(contact);
                 }
-                DLC.addNVP("contacts", contacts, e);
+                e.addNVP("contacts", contacts);
                 break;
             }
             case OPERATION_DELETE_CONTACT: {
@@ -277,9 +299,9 @@ public class DIDService extends BaseService {
                 HashRequest r = (HashRequest)DLC.getData(HashRequest.class,e);
                 try {
                     if(r.generateHash)
-                        r.hash = HashUtil.generateHash(r.contentToHash, Hash.Algorithm.SHA256);
+                        r.hash = new Hash(HashUtil.generateHash(r.contentToHash, Hash.Algorithm.SHA256.getName()), Hash.Algorithm.SHA256);
                     if(r.generateFingerprint && r.hash != null) {
-                        r.fingerprint = HashUtil.generateHash(r.hash.getHash(), Hash.Algorithm.SHA1);
+                        r.fingerprint = new Hash(HashUtil.generateHash(r.hash.getHash(), Hash.Algorithm.SHA1.getName()), Hash.Algorithm.SHA1);
                     }
                 } catch (NoSuchAlgorithmException e1) {
                     r.statusCode = UNKNOWN_HASH_ALGORITHM;
@@ -287,9 +309,9 @@ public class DIDService extends BaseService {
                 break;
             }
             case OPERATION_VERIFY_HASH:{
-                VerifyHashRequest r = (VerifyHashRequest)DLC.getData(VerifyHashRequest.class,e);
+                VerifyHashRequest r = (VerifyHashRequest)e.getData(VerifyHashRequest.class);
                 try {
-                    r.isAMatch = HashUtil.verifyHash(r.content, r.hashToVerify);
+                    r.isAMatch = HashUtil.verifyHash(r.content, r.hashToVerify.getHash(), r.hashToVerify.getAlgorithm().getName());
                 } catch (NoSuchAlgorithmException e1) {
                     r.statusCode = UNKNOWN_HASH_ALGORITHM;
                 }
@@ -316,12 +338,12 @@ public class DIDService extends BaseService {
      * Saves and returns Identity DID generating passphrase hash if none exists.
      * @param did DID
      */
-    private DID saveIdentity(DID did, boolean autoCreate, boolean isNode) {
+    private DID saveIdentity(DID did, boolean autoCreate, boolean isNode, boolean toExternal) {
         LOG.info("Saving Identity DID...");
         if(did.getPassphraseHash() == null) {
             LOG.info("Hashing passphrase...");
             try {
-                did.setPassphraseHash(HashUtil.generatePasswordHash(did.getPassphrase()));
+                did.setPassphraseHash(new Hash(HashUtil.generatePasswordHash(did.getPassphrase()), Hash.Algorithm.PBKDF2WithHmacSHA1));
                 // ensure passphrase is cleared
                 did.setPassphrase(null);
             } catch (NoSuchAlgorithmException ex) {
@@ -329,25 +351,19 @@ public class DIDService extends BaseService {
                 return did;
             }
         }
-        try {
+            JSON json = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getPublicKey().getFingerprint(), false, false);
+            json.setLocation(getServiceDirectory()+"/i/"+did.getPublicKey().getFingerprint());
+            InfoVault iv = new InfoVault();
+            iv.content = json;
+            iv.storeExternal = toExternal;
+            iv.autoCreate = autoCreate;
             if(isNode) {
-                nodeDB.save(
-                        DID.class.getName(),
-                        did.getPublicKey().getFingerprint(),
-                        did.toJSON().getBytes(),
-                        autoCreate);
+                nodesDB.save(iv);
                 LOG.info("Node Identity DID saved.");
             } else {
-                identitiesDB.save(
-                        DID.class.getName(),
-                        did.getPublicKey().getFingerprint(),
-                        did.toJSON().getBytes(),
-                        autoCreate);
+                identitiesDB.save(iv);
                 LOG.info("Identity DID saved.");
             }
-        } catch (FileNotFoundException e) {
-            LOG.warning(e.getLocalizedMessage());
-        }
         return did;
     }
 
@@ -378,7 +394,7 @@ public class DIDService extends BaseService {
             Boolean authN = null;
             LOG.info("Verifying password hash...");
             try {
-                authN = HashUtil.verifyPasswordHash(r.did.getPassphrase(), loadedDID.getPassphraseHash());
+                authN = HashUtil.verifyPasswordHash(r.did.getPassphrase(), loadedDID.getPassphraseHash().getHash());
             } catch (NoSuchAlgorithmException e) {
                 e.printStackTrace();
                 LOG.warning(e.getLocalizedMessage());
@@ -396,8 +412,10 @@ public class DIDService extends BaseService {
         boolean isNode = nodeDID == null;
         DID result;
         LOG.info("Received verify DID request.");
-        DID didLoaded = loadIdentity(r.did.getPublicKey().getFingerprint(), isNode);
-        if(didLoaded != null && r.did.getPublicKey().getFingerprint() != null && r.did.getPublicKey().getFingerprint().equals(didLoaded.getPublicKey().getFingerprint())) {
+        DID didLoaded = loadIdentity(r.did.getPublicKey().getFingerprint(), isNode, false);
+        if(didLoaded != null
+                && r.did.getPublicKey().getFingerprint() != null
+                && r.did.getPublicKey().getFingerprint().equals(didLoaded.getPublicKey().getFingerprint())) {
             didLoaded.setVerified(true);
             LOG.info("DID verification successful.");
             result = didLoaded;
@@ -422,11 +440,11 @@ public class DIDService extends BaseService {
         return loadedDID == null || loadedDID.getUsername() == null || loadedDID.getUsername().isEmpty();
     }
 
-    private DID loadIdentity(String fingerprint, boolean isNode) {
+    private DID loadIdentity(String fingerprint, boolean isNode, boolean fromExternal) {
         DID loadedDID = new DID();
         byte[] content;
         try {
-            content = isNode ? nodeDB.load(DID.class.getName(), fingerprint) : identitiesDB.load(DID.class.getName(), fingerprint);
+            content = isNode ? nodesDB.load(DID.class.getName(), fingerprint) : identitiesDB.load(DID.class.getName(), fingerprint);
         } catch (FileNotFoundException e) {
             return null;
         }
@@ -437,7 +455,7 @@ public class DIDService extends BaseService {
         return loadedDID;
     }
 
-    private List<DID> loadIdentities(int start, int numberIdentities) {
+    private List<DID> loadIdentities(int start, int numberIdentities, boolean fromExternal) {
         List<byte[]> bList = identitiesDB.loadRange(DID.class.getName(), start, numberIdentities);
         DID did;
         List<DID> dList = new ArrayList<>();
@@ -453,30 +471,26 @@ public class DIDService extends BaseService {
      * Saves and returns Contact DID.
      * @param did DID
      */
-    private DID saveContact(DID did, boolean autoCreate) {
+    private DID saveContact(DID did, boolean autoCreate, boolean storeExternal) {
         LOG.info("Saving Contact DID...");
-        try {
-            contactsDB.save(
-                    DID.class.getName(),
-                    did.getPublicKey().getFingerprint(),
-                    did.toJSON().getBytes(),
-                    autoCreate);
-        } catch (FileNotFoundException e) {
-            LOG.warning(e.getLocalizedMessage());
-        }
+        InfoVault iv = new InfoVault();
+        iv.content = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getPublicKey().getFingerprint(), false, false);
+        iv.content.setLocation(getServiceDirectory()+"/c/"+did.getPublicKey().getFingerprint());
+        iv.autoCreate = autoCreate;
+        iv.storeExternal = storeExternal;
+        contactsDB.save(iv);
         LOG.info("Contact DID saved.");
         return did;
     }
 
-    private DID loadContact(String fingerprint) {
+    private DID loadContact(String fingerprint, boolean fromExternal) {
         DID loadedDID = new DID();
         byte[] content;
-        try {
-            content = contactsDB.load(DID.class.getName(), fingerprint);
-        } catch (FileNotFoundException e) {
-            return null;
-        }
-        String jsonBody = new String(content);
+        InfoVault iv = new InfoVault();
+        iv.content = new JSON(null, DID.class.getName(), fingerprint, false, false);
+        iv.content.setLocation(getServiceDirectory()+"/c/"+fingerprint);
+        contactsDB.load(iv);
+        String jsonBody = JSONPretty.toPretty(new String(iv.content.getBody()), 4);
         LOG.info("JSON loaded: "+jsonBody);
         loadedDID.fromMap((Map<String, Object>) JSONParser.parse(jsonBody));
         LOG.info("Contact DID Loaded from map.");
@@ -504,31 +518,11 @@ public class DIDService extends BaseService {
         LOG.info("Starting....");
         updateStatus(ServiceStatus.STARTING);
         // TODO: Support external drives (InfoVault)
-        try {
-            nodeDB = InfoVaultService.factory("node", getServiceDirectory().getAbsolutePath(), LocalFSInfoVaultDB.class.getName(), properties);
-            identitiesDB = InfoVaultService.factory("identities", getServiceDirectory().getAbsolutePath(), LocalFSInfoVaultDB.class.getName(), properties);
-            contactsDB = InfoVaultService.factory("contacts", getServiceDirectory().getAbsolutePath(), LocalFSInfoVaultDB.class.getName(), properties);
-        } catch (ClassNotFoundException e) {
-            LOG.warning(e.getLocalizedMessage());
-            updateStatus(ServiceStatus.ERROR);
-            return false;
-        } catch (IllegalAccessException e) {
-            LOG.warning(e.getLocalizedMessage());
-            updateStatus(ServiceStatus.ERROR);
-            return false;
-        } catch (InstantiationException e) {
-            LOG.warning(e.getLocalizedMessage());
-            updateStatus(ServiceStatus.ERROR);
-            return false;
-        } catch (InvocationTargetException e) {
-            LOG.warning(e.getLocalizedMessage());
-            updateStatus(ServiceStatus.ERROR);
-            return false;
-        } catch (NoSuchMethodException e) {
-            LOG.warning(e.getLocalizedMessage());
-            updateStatus(ServiceStatus.ERROR);
-            return false;
-        }
+
+        nodesDB = InfoVaultService.factory("node", getServiceDirectory().getAbsolutePath(), LocalFSInfoVaultDB.class.getName(), properties);
+        identitiesDB = InfoVaultService.factory("identities", getServiceDirectory().getAbsolutePath(), LocalFSInfoVaultDB.class.getName(), properties);
+        contactsDB = InfoVaultService.factory("contacts", getServiceDirectory().getAbsolutePath(), LocalFSInfoVaultDB.class.getName(), properties);
+
         updateStatus(ServiceStatus.RUNNING);
         LOG.info("Started.");
         return true;
