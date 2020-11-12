@@ -12,5 +12,6 @@ public class AuthenticateDIDRequest extends ServiceMessage {
 
     public DID did;
     public Boolean autogenerate = true;
+    public Boolean isNode = false;
 
 }

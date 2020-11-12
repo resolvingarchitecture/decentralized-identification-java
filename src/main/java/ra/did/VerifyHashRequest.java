@@ -9,7 +9,7 @@ public class VerifyHashRequest extends ServiceMessage {
     public static int INVALID_KEY_SPEC = 2;
 
     // Request
-    public String content;
+    public byte[] content;
     public Hash hashToVerify;
     public boolean isShort = false; // full is default
     // Result
