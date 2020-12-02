@@ -12,19 +12,14 @@ import ra.common.messaging.TextMessage;
 import ra.common.route.Route;
 import ra.common.service.BaseService;
 import ra.common.service.ServiceStatus;
-import ra.common.service.ServiceStatusListener;
+import ra.common.service.ServiceStatusObserver;
 import ra.keyring.AuthNRequest;
 import ra.keyring.GenerateKeyRingCollectionsRequest;
 import ra.util.HashUtil;
-import ra.util.JSONParser;
-import ra.util.JSONPretty;
 
-import java.io.File;
-import java.io.FileNotFoundException;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
 import java.util.logging.Logger;
 
@@ -77,8 +72,8 @@ public class DIDService extends BaseService {
 
     public DIDService() {}
 
-    public DIDService(MessageProducer producer, ServiceStatusListener serviceStatusListener) {
-        super(producer, serviceStatusListener);
+    public DIDService(MessageProducer producer, ServiceStatusObserver serviceStatusObserver) {
+        super(producer, serviceStatusObserver);
     }
 
     @Override
