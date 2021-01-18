@@ -17,6 +17,7 @@ import ra.keyring.AuthNRequest;
 import ra.keyring.GenerateKeyRingCollectionsRequest;
 import ra.util.HashUtil;
 
+import java.io.File;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
@@ -507,11 +508,11 @@ public class DIDService extends BaseService {
         updateStatus(ServiceStatus.STARTING);
         // TODO: Support external drives (InfoVault)
         nodesDB = new InfoVaultFileDB();
-        nodesDB.setBaseURL(getServiceDirectory()+NODE_DIR);
+        nodesDB.setBaseURL(new File(getServiceDirectory(),NODE_DIR).getAbsolutePath());
         identitiesDB = new InfoVaultFileDB();
-        identitiesDB.setBaseURL(getServiceDirectory()+IDENTITY_DIR);
+        identitiesDB.setBaseURL(new File(getServiceDirectory(),IDENTITY_DIR).getAbsolutePath());
         contactsDB = new InfoVaultFileDB();
-        contactsDB.setBaseURL(getServiceDirectory()+CONTACT_DIR);
+        contactsDB.setBaseURL(new File(getServiceDirectory(),CONTACT_DIR).getAbsolutePath());
         updateStatus(ServiceStatus.RUNNING);
         LOG.info("Started.");
         return true;
