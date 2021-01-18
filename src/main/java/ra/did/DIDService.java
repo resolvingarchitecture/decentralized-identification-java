@@ -54,13 +54,13 @@ public class DIDService extends BaseService {
     public static final String OPERATION_GET_CONTACTS = "GET_CONTACTS";
     public static final String OPERATION_DELETE_CONTACT = "DELETE_CONTACT";
 
-    private static final int MAX_IDENTITIES = 100;
+    private static final int MAX_IDENTITIES = 10;
     private static final int MAX_CONTACTS = 10000;
     private static final int MAX_CONTACTS_LIST = 100;
 
-    private static final String CONTACT_DIR = "/c/";
-    private static final String IDENTITY_DIR = "/i/";
-    private static final String NODE_DIR = "/n/";
+    private static final String CONTACT_DIR = "c";
+    private static final String IDENTITY_DIR = "i";
+    private static final String NODE_DIR = "n";
 
     // Internal
     private DID nodeDID;
@@ -136,7 +136,7 @@ public class DIDService extends BaseService {
                         identitiesNumber = MAX_IDENTITIES;
                     }
                 }
-                List<DID> identities = loadIdentities(start, MAX_IDENTITIES, false);
+                List<DID> identities = loadIdentities(start, identitiesNumber, false);
                 e.addNVP("identities", identities);
                 break;
             }
