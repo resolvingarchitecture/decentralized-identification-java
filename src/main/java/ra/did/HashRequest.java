@@ -1,6 +1,5 @@
 package ra.did;
 
-
 import ra.common.crypto.Hash;
 import ra.common.service.ServiceMessage;
 

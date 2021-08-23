@@ -15,7 +15,7 @@ import ra.common.service.ServiceStatus;
 import ra.common.service.ServiceStatusObserver;
 import ra.keyring.AuthNRequest;
 import ra.keyring.GenerateKeyRingCollectionsRequest;
-import ra.util.HashUtil;
+import ra.common.HashUtil;
 
 import java.io.File;
 import java.security.NoSuchAlgorithmException;
