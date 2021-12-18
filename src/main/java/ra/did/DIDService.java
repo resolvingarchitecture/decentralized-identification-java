@@ -1,50 +1,66 @@
 package ra.did;
 
-import ra.common.DLC;
-import ra.common.Envelope;
-import ra.common.InfoVault;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.openpgp.PGPException;
+import org.bouncycastle.openpgp.PGPPublicKey;
+import org.bouncycastle.openpgp.PGPPublicKeyRingCollection;
+import ra.common.*;
 import ra.common.content.JSON;
+import ra.common.crypto.EncryptionAlgorithm;
 import ra.common.crypto.Hash;
 import ra.common.file.InfoVaultFileDB;
 import ra.common.identity.DID;
+import ra.common.identity.PublicKey;
 import ra.common.messaging.MessageProducer;
 import ra.common.messaging.TextMessage;
 import ra.common.route.Route;
 import ra.common.service.BaseService;
 import ra.common.service.ServiceStatus;
 import ra.common.service.ServiceStatusObserver;
-import ra.keyring.AuthNRequest;
-import ra.keyring.GenerateKeyRingCollectionsRequest;
-import ra.common.HashUtil;
 
+import javax.crypto.*;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.File;
-import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Properties;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
+import java.security.*;
+import java.util.*;
 import java.util.logging.Logger;
 
+import static java.util.Objects.isNull;
+import static java.util.Objects.nonNull;
 import static ra.did.HashRequest.UNKNOWN_HASH_ALGORITHM;
+import static ra.did.HashStrength.HASH_STRENGTH_64;
 
 
 /**
  * Decentralized IDentifier (DID) Service
- *
- * TODO: Support External and make it the default choice
  */
 public class DIDService extends BaseService {
 
     private static final Logger LOG = Logger.getLogger(DIDService.class.getName());
 
+    public static final String OPERATION_GENERATE_KEY_RINGS_COLLECTIONS = "GENERATE_KEY_RINGS_COLLECTIONS";
+    public static final String OPERATION_GENERATE_KEY_RINGS = "GENERATE_KEY_RINGS";
+    public static final String OPERATION_AUTHN_MASTER_RING = "AUTHN_MASTER_RING";
+    public static final String OPERATION_ENCRYPT = "ENCRYPT";
+    public static final String OPERATION_DECRYPT = "DECRYPT";
+    public static final String OPERATION_ENCRYPT_SYMMETRIC = "ENCRYPT_SYMMETRIC";
+    public static final String OPERATION_DECRYPT_SYMMETRIC = "DECRYPT_SYMMETRIC";
+    public static final String OPERATION_SIGN = "SIGN";
+    public static final String OPERATION_VERIFY_SIGNATURE = "VERIFY_SIGNATURE";
+    public static final String OPERATION_VOUCH = "VOUCH";
+    public static final String OPERATION_RELOAD = "RELOAD";
+
     public static final String OPERATION_GET_IDENTITIES = "GET_IDENTITIES";
-    public static final String OPERATION_SET_ACTIVE_IDENTITY = "SET_ACTIVE_IDENTITY";
-    public static final String OPERATION_GET_ACTIVE_IDENTITY = "GET_ACTIVE_IDENTITY";
-    public static final String OPERATION_VERIFY_IDENTITY = "VERIFY"; // Read/Verify
-    public static final String OPERATION_SAVE_IDENTITY = "SAVE"; // Create/Update
+    public static final String OPERATION_GET_IDENTITY = "GET_IDENTITY";
+    public static final String OPERATION_VERIFY_IDENTITY = "VERIFY";
+    public static final String OPERATION_SAVE_IDENTITY = "SAVE";
     public static final String OPERATION_DELETE_IDENTITY = "DELETE";
 
     public static final String OPERATION_AUTHENTICATE = "AUTHENTICATE";
-    public static final String OPERATION_AUTHENTICATE_CREATE = "AUTHENTICATE_CREATE";
 
     public static final String OPERATION_HASH = "HASH";
     public static final String OPERATION_VERIFY_HASH = "VERIFY_HASH";
@@ -58,16 +74,12 @@ public class DIDService extends BaseService {
     private static final int MAX_CONTACTS = 10000;
     private static final int MAX_CONTACTS_LIST = 100;
 
-    private static final String CONTACT_DIR = "c";
-    private static final String IDENTITY_DIR = "i";
-    private static final String NODE_DIR = "n";
+    private Properties properties = new Properties();
 
-    // Internal
-    private DID nodeDID;
-    private DID activeIdentity;
-    private InfoVaultFileDB identitiesDB;
+    private Map<String, KeyRing> keyRings = new HashMap<>();
 
-    // External
+    // Identity DBs
+    private InfoVaultFileDB identitiesDB; // Personal
     private InfoVaultFileDB nodesDB;
     private InfoVaultFileDB contactsDB;
 
@@ -95,167 +107,552 @@ public class DIDService extends BaseService {
     private void handleAll(Envelope e) {
         Route route = e.getRoute();
         String operation = route.getOperation();
+        KeyRing keyRing;
         switch(operation) {
-            case OPERATION_SET_ACTIVE_IDENTITY: {
-                LOG.info("Received set active identity....");
-                String fingerprint = (String) e.getValue("fingerprint");
-                if(fingerprint ==null) {
-                    e.addErrorMessage("No Fingerprint");
+            case OPERATION_GENERATE_KEY_RINGS_COLLECTIONS: {
+                LOG.info("Generate Key Rings Collections request received.");
+                GenerateKeyRingCollectionsRequest r = (GenerateKeyRingCollectionsRequest) e.getData(GenerateKeyRingCollectionsRequest.class);
+                if(r == null) {
+                    LOG.warning("GenerateKeyRingCollectionsRequest required.");
+                    r = new GenerateKeyRingCollectionsRequest();
+                    r.statusCode = GenerateKeyRingCollectionsRequest.REQUEST_REQUIRED;
+                    e.addData(GenerateKeyRingCollectionsRequest.class, r);
                     break;
                 }
-                activeIdentity = loadIdentity(fingerprint, false, false);
-                e.addEntity(activeIdentity);
+                File f;
+                if(r.location == null || r.location.isEmpty()) {
+                    // default
+                    f = getServiceDirectory();
+                    r.location = f.getAbsolutePath();
+                } else {
+                    f = new File(r.location);
+                }
+                if(!f.exists() && !f.mkdir()) {
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_LOCATION_INACCESSIBLE;
+                    break;
+                }
+                if(r.keyRingUsername == null) {
+                    LOG.warning("KeyRing username required.");
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_USERNAME_REQUIRED;
+                    break;
+                }
+                if(r.keyRingPassphrase == null) {
+                    LOG.warning("KeyRing passphrase required.");
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_PASSPHRASE_REQUIRED;
+                    break;
+                }
+                if(r.hashStrength < HASH_STRENGTH_64) {
+                    r.hashStrength = HASH_STRENGTH_64; // minimum
+                }
+                if(r.keyRingImplementation == null) {
+                    r.keyRingImplementation = OpenPGPKeyRing.class.getName(); // Default
+                }
+                try {
+                    keyRing = keyRings.get(r.keyRingImplementation);
+                    if(keyRing == null) {
+                        LOG.warning("KeyRing implementation unknown: "+r.keyRingImplementation);
+                        r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+                        return;
+                    }
+                    keyRing.generateKeyRingCollections(r);
+                } catch (Exception ex) {
+                    r.exception = ex;
+                }
                 break;
             }
-            case OPERATION_GET_ACTIVE_IDENTITY: {
-                LOG.info("Received get active identity....");
-                if(activeIdentity !=null) {
-                    e.addNVP("activeIdentity",activeIdentity);
+            case OPERATION_AUTHN_MASTER_RING: {
+                AuthNKeyRingRequest r = (AuthNKeyRingRequest)e.getData(AuthNKeyRingRequest.class);
+                if(r==null) {
+                    r = new AuthNKeyRingRequest();
+                    r.statusCode = AuthNKeyRingRequest.REQUEST_REQUIRED;
+                    e.addData(AuthNKeyRingRequest.class, r);
                     break;
                 }
-                List<DID> identitiesLoaded = loadIdentities(1, MAX_IDENTITIES, false);
-                for(DID d : identitiesLoaded) {
-                    if(DID.Status.ACTIVE == d.getStatus()) {
-                        activeIdentity = d;
-                        e.addNVP("activeIdentity",activeIdentity);
+                File f;
+                if(r.location == null || r.location.isEmpty()) {
+                    // Set locally
+                    f = getServiceDirectory();
+                    r.location = f.getAbsolutePath();
+                } else {
+                    f = new File(r.location);
+                }
+                if(!f.exists() && !f.mkdir()) {
+                    r.statusCode = AuthNKeyRingRequest.KEYRING_LOCATION_INACCESSIBLE;
+                    break;
+                }
+                if(r.keyRingUsername == null) {
+                    LOG.warning("KeyRing username required.");
+                    r.statusCode = AuthNKeyRingRequest.KEY_RING_USERNAME_REQUIRED;
+                    break;
+                }
+                if(r.keyRingPassphrase == null) {
+                    LOG.warning("KeyRing passphrase required.");
+                    r.statusCode = AuthNKeyRingRequest.KEY_RING_PASSPHRASE_REQUIRED;
+                    break;
+                }
+                if(r.alias == null || r.alias.isEmpty()) {
+                    r.statusCode = AuthNKeyRingRequest.ALIAS_REQUIRED;
+                    break;
+                }
+                if(r.aliasPassphrase == null || r.aliasPassphrase.isEmpty()) {
+                    r.statusCode = AuthNKeyRingRequest.ALIAS_PASSPHRASE_REQUIRED;
+                    break;
+                }
+                if(r.keyRingImplementation == null) {
+                    r.keyRingImplementation = OpenPGPKeyRing.class.getName(); // Default
+                }
+                try {
+                    keyRing = keyRings.get(r.keyRingImplementation);
+                    if(keyRing == null) {
+                        LOG.warning("KeyRing implementation unknown: "+r.keyRingImplementation);
+                        r.statusCode = AuthNKeyRingRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+                        return;
+                    }
+                    PGPPublicKeyRingCollection c = null;
+                    try {
+                        c = keyRing.getPublicKeyRingCollection(r.location, r.keyRingUsername, r.keyRingPassphrase);
+                    } catch (IOException e1) {
+                        LOG.info("No key ring collection found.");
+                        break;
+                    } catch (PGPException e1) {
+                        LOG.warning(e1.getLocalizedMessage());
                         break;
                     }
+
+                    PGPPublicKey identityPublicKey = keyRing.getPublicKey(c, r.alias, true);
+                    r.identityPublicKey = new PublicKey();
+                    r.identityPublicKey.setAlias(r.alias);
+                    r.identityPublicKey.setFingerprint(Base64.getEncoder().encodeToString(identityPublicKey.getFingerprint()));
+                    r.identityPublicKey.setAddress(Base64.getEncoder().encodeToString(identityPublicKey.getEncoded()));
+                    r.identityPublicKey.setBase64Encoded(true);
+                    r.identityPublicKey.setType("RSA2048");
+                    r.identityPublicKey.isEncryptionKey(identityPublicKey.isEncryptionKey());
+                    r.identityPublicKey.isIdentityKey(identityPublicKey.isMasterKey());
+                    LOG.info("Identity Public Key loaded: " + r.identityPublicKey);
+
+                    PGPPublicKey encryptionPublicKey = keyRing.getPublicKey(c, r.alias, false);
+                    r.encryptionPublicKey = new PublicKey();
+                    r.encryptionPublicKey.setAlias(r.alias);
+                    r.encryptionPublicKey.setFingerprint(Base64.getEncoder().encodeToString(encryptionPublicKey.getFingerprint()));
+                    r.encryptionPublicKey.setAddress(Base64.getEncoder().encodeToString(encryptionPublicKey.getEncoded()));
+                    r.encryptionPublicKey.setBase64Encoded(true);
+                    r.encryptionPublicKey.setType("RSA2048");
+                    r.encryptionPublicKey.isEncryptionKey(encryptionPublicKey.isEncryptionKey());
+                    r.encryptionPublicKey.isIdentityKey(encryptionPublicKey.isMasterKey());
+                    LOG.info("Encryption Public Key loaded: " + r.encryptionPublicKey);
+                } catch (Exception ex) {
+                    r.exception = ex;
+                    LOG.warning(ex.getLocalizedMessage());
                 }
                 break;
+            }
+            case OPERATION_GENERATE_KEY_RINGS: {
+                GenerateKeyRingRequest r = (GenerateKeyRingRequest)e.getData(GenerateKeyRingRequest.class);
+                if(r == null) {
+                    r = new GenerateKeyRingRequest();
+                    r.statusCode = GenerateKeyRingRequest.REQUEST_REQUIRED;
+                    break;
+                }
+                File f;
+                if(r.location == null || r.location.isEmpty()) {
+                    // Set locally
+                    f = getServiceDirectory();
+                    r.location = f.getAbsolutePath();
+                } else {
+                    f = new File(r.location);
+                }
+                if(!f.exists() && !f.mkdir()) {
+                    r.statusCode = GenerateKeyRingRequest.KEYRING_LOCATION_INACCESSIBLE;
+                    break;
+                }
+                if(r.keyRingUsername == null || r.keyRingUsername.isEmpty()) {
+                    r.statusCode = GenerateKeyRingRequest.KEYRING_USERNAME_REQUIRED;
+                    break;
+                }
+                if(r.keyRingPassphrase == null || r.keyRingPassphrase.isEmpty()) {
+                    r.statusCode = GenerateKeyRingRequest.KEYRING_PASSPHRASE_REQUIRED;
+                    break;
+                }
+                if(r.alias == null || r.alias.isEmpty()) {
+                    r.statusCode = GenerateKeyRingRequest.ALIAS_REQUIRED;
+                    break;
+                }
+                if(r.aliasPassphrase == null || r.aliasPassphrase.isEmpty()) {
+                    r.statusCode = GenerateKeyRingRequest.ALIAS_PASSPHRASE_REQUIRED;
+                    break;
+                }
+                if(r.keyRingImplementation == null)
+                    r.keyRingImplementation = OpenPGPKeyRing.class.getName(); // default
+                keyRing = keyRings.get(r.keyRingImplementation);
+                if(keyRing == null) {
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+                    return;
+                }
+                try {
+                    keyRing.createKeyRings(r.location, r.keyRingUsername, r.keyRingPassphrase, r.alias, r.aliasPassphrase, r.hashStrength, r.keyRingImplementation);
+                } catch (Exception ex) {
+                    r.exception = ex;
+                    LOG.warning(ex.getLocalizedMessage());
+                }
+                break;
+            }
+            case OPERATION_ENCRYPT: {
+                EncryptRequest r = (EncryptRequest)e.getData(EncryptRequest.class);
+                if(r == null) {
+                    r = new EncryptRequest();
+                    r.statusCode = EncryptRequest.REQUEST_REQUIRED;
+                    e.addData(EncryptRequest.class, r);
+                    break;
+                }
+                if(r.location == null) {
+                    r.statusCode = EncryptRequest.LOCATION_REQUIRED;
+                    break;
+                }
+                File f = new File(r.location);
+                if(!f.exists() && !f.mkdir()) {
+                    r.statusCode = EncryptRequest.LOCATION_INACCESSIBLE;
+                    break;
+                }
+                if(r.content == null || r.content.getBody() == null || r.content.getBody().length == 0) {
+                    r.statusCode = EncryptRequest.CONTENT_TO_ENCRYPT_REQUIRED;
+                    break;
+                }
+                if(r.publicKeyAlias == null) {
+                    r.statusCode = EncryptRequest.PUBLIC_KEY_ALIAS_REQUIRED;
+                    break;
+                }
+                keyRing = keyRings.get(r.keyRingImplementation);
+                if(keyRing == null) {
+                    r.statusCode = EncryptRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+                    return;
+                }
+                try {
+                    keyRing.encrypt(r);
+                } catch (Exception ex) {
+                    r.exception = ex;
+                    LOG.warning(ex.getLocalizedMessage());
+                }
+                break;
+            }
+            case OPERATION_DECRYPT: {
+                DecryptRequest r = (DecryptRequest)e.getData(DecryptRequest.class);
+                if(r == null) {
+                    r = new DecryptRequest();
+                    r.statusCode = DecryptRequest.REQUEST_REQUIRED;
+                    e.addData(DecryptRequest.class, r);
+                    break;
+                }
+                if(r.location == null) {
+                    r.statusCode = DecryptRequest.LOCATION_REQUIRED;
+                    break;
+                }
+                File f = new File(r.location);
+                if(!f.exists() && !f.mkdir()) {
+                    r.statusCode = DecryptRequest.LOCATION_INACCESSIBLE;
+                    break;
+                }
+                keyRing = keyRings.get(r.keyRingImplementation);
+                if(keyRing == null) {
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+                    return;
+                }
+                try {
+                    keyRing.decrypt(r);
+                } catch (Exception ex) {
+                    r.exception = ex;
+                    LOG.warning(ex.getLocalizedMessage());
+                }
+                break;
+            }
+            case OPERATION_SIGN: {
+                SignRequest r = (SignRequest)e.getData(SignRequest.class);
+                if(r == null) {
+                    r = new SignRequest();
+                    r.statusCode = SignRequest.REQUEST_REQUIRED;
+                    e.addData(SignRequest.class, r);
+                    break;
+                }
+                if(r.location == null) {
+                    r.statusCode = SignRequest.LOCATION_REQUIRED;
+                    break;
+                }
+                File f = new File(r.location);
+                if(!f.exists() && !f.mkdir()) {
+                    r.statusCode = SignRequest.LOCATION_INACCESSIBLE;
+                    break;
+                }
+                keyRing = keyRings.get(r.keyRingImplementation);
+                if(keyRing == null) {
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+                    return;
+                }
+                try {
+                    keyRing.sign(r);
+                } catch (Exception ex) {
+                    r.exception = ex;
+                    LOG.warning(ex.getLocalizedMessage());
+                }
+                break;
+            }
+            case OPERATION_VERIFY_SIGNATURE: {
+                VerifySignatureRequest r = (VerifySignatureRequest)e.getData(VerifySignatureRequest.class);
+                if(r == null) {
+                    r = new VerifySignatureRequest();
+                    r.statusCode = VerifySignatureRequest.REQUEST_REQUIRED;
+                    e.addData(VerifySignatureRequest.class, r);
+                    break;
+                }
+                if(r.location == null) {
+                    r.statusCode = VerifySignatureRequest.LOCATION_REQUIRED;
+                    break;
+                }
+                File f = new File(r.location);
+                if(!f.exists() && !f.mkdir()) {
+                    r.statusCode = VerifySignatureRequest.LOCATION_INACCESSIBLE;
+                    break;
+                }
+                keyRing = keyRings.get(r.keyRingImplementation);
+                if(keyRing == null) {
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+                    return;
+                }
+                try {
+                    keyRing.verifySignature(r);
+                } catch (Exception ex) {
+                    r.exception = ex;
+                    LOG.warning(ex.getLocalizedMessage());
+                }
+                break;
+            }
+            case OPERATION_ENCRYPT_SYMMETRIC: {
+                EncryptSymmetricRequest r = (EncryptSymmetricRequest)e.getData(EncryptSymmetricRequest.class);
+                if(r==null) {
+                    r = new EncryptSymmetricRequest();
+                    r.statusCode = EncryptSymmetricRequest.REQUEST_REQUIRED;
+                    e.addData(EncryptSymmetricRequest.class, r);
+                    break;
+                }
+                if(r.content == null || r.content.getBody() == null || r.content.getBody().length == 0) {
+                    r.statusCode = EncryptSymmetricRequest.CONTENT_TO_ENCRYPT_REQUIRED;
+                    break;
+                }
+                if(r.content.getEncryptionPassphrase() == null || r.content.getEncryptionPassphrase().isEmpty()) {
+                    r.statusCode = EncryptSymmetricRequest.PASSPHRASE_REQUIRED;
+                    break;
+                }
+                try {
+                    byte[] key = r.content.getEncryptionPassphrase().getBytes(StandardCharsets.UTF_8);
+                    MessageDigest sha = MessageDigest.getInstance("SHA-1");
+                    key = sha.digest(key);
+                    key = Arrays.copyOf(key,16);
+                    // Encrypt
+                    SecretKey secretKey = new SecretKeySpec(key, "AES");
+                    Cipher aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+                    byte[] iv = new byte[16];
+                    SecureRandom random = new SecureRandom();
+                    random.nextBytes(iv);
+                    IvParameterSpec ivParameterSpec = new IvParameterSpec(iv);
+                    aesCipher.init(Cipher.ENCRYPT_MODE, secretKey, ivParameterSpec);
+                    r.content.setBody(aesCipher.doFinal(r.content.getBody()), false, false);
+                    r.content.setBody(Base64.getEncoder().encodeToString(r.content.getBody()).getBytes(), false, false);
+                    r.content.setBodyBase64Encoded(true);
+                    r.content.setBase64EncodedIV(Base64.getEncoder().encodeToString(iv));
+                    r.content.setEncrypted(true);
+                    r.content.setEncryptionAlgorithm(EncryptionAlgorithm.AES256);
+                } catch (NoSuchAlgorithmException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                } catch (NoSuchPaddingException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                } catch (InvalidKeyException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                } catch (InvalidAlgorithmParameterException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                } catch (IllegalBlockSizeException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                } catch (BadPaddingException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                }
+
+                break;
+            }
+            case OPERATION_DECRYPT_SYMMETRIC: {
+                DecryptSymmetricRequest r = (DecryptSymmetricRequest)e.getData(DecryptSymmetricRequest.class);
+                if(r==null) {
+                    r = new DecryptSymmetricRequest();
+                    e.addData(DecryptSymmetricRequest.class, r);
+                    r.statusCode = DecryptSymmetricRequest.REQUEST_REQUIRED;
+                    break;
+                }
+                if(r.content == null || r.content.getBody() == null || r.content.getBody().length == 0) {
+                    r.statusCode = DecryptSymmetricRequest.ENCRYPTED_CONTENT_REQUIRED;
+                    break;
+                }
+                if(r.content.getEncryptionPassphrase()==null || r.content.getEncryptionPassphrase().isEmpty()) {
+                    r.statusCode = DecryptSymmetricRequest.PASSPHRASE_REQUIRED;
+                    break;
+                }
+                if(r.content.getBase64EncodedIV()==null || r.content.getBase64EncodedIV().isEmpty()) {
+                    r.statusCode = DecryptSymmetricRequest.IV_REQUIRED;
+                    break;
+                }
+                try {
+                    byte[] key = r.content.getEncryptionPassphrase().getBytes(StandardCharsets.UTF_8);
+                    MessageDigest sha = MessageDigest.getInstance("SHA-1");
+                    key = sha.digest(key);
+                    key = Arrays.copyOf(key,16);
+                    // Encrypt
+                    SecretKey secretKey = new SecretKeySpec(key, "AES");
+                    Cipher aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+                    if(r.content.getBodyBase64Encoded()) {
+                        r.content.setBody(Base64.getDecoder().decode(r.content.getBody()), false, false);
+                        r.content.setBodyBase64Encoded(false);
+                    }
+                    byte[] iv = Base64.getDecoder().decode(r.content.getBase64EncodedIV());
+                    IvParameterSpec ivParameterSpec = new IvParameterSpec(iv);
+                    aesCipher.init(Cipher.DECRYPT_MODE, secretKey, ivParameterSpec);
+                    r.content.setBody(aesCipher.doFinal(r.content.getBody()), false, false);
+                    r.content.setEncrypted(false);
+                    r.content.setBase64EncodedIV(null);
+                    r.content.setEncryptionAlgorithm(null);
+                } catch (NoSuchAlgorithmException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                } catch (NoSuchPaddingException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                } catch (InvalidKeyException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                } catch (InvalidAlgorithmParameterException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                } catch (IllegalBlockSizeException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
+                } catch (BadPaddingException e1) {
+                    r.statusCode = DecryptSymmetricRequest.BAD_PASSPHRASE;
+                    LOG.warning(e1.getLocalizedMessage());
+                }
+                break;
+            }
+            case OPERATION_VOUCH: {
+                VouchRequest r = (VouchRequest)e.getData(VouchRequest.class);
+                if(r.signer==null) {
+                    r.statusCode = VouchRequest.SIGNER_REQUIRED;
+                    break;
+                }
+                if(r.signee==null){
+                    r.statusCode = VouchRequest.SIGNEE_REQUIRED;
+                    break;
+                }
+                if(r.attributesToSign==null) {
+                    r.statusCode = VouchRequest.ATTRIBUTES_REQUIRED;
+                    break;
+                }
+                // TODO: Verify attributes to sign are available attributes
+                LOG.warning("VOUCH not yet implemented.");
+            }
+            case OPERATION_RELOAD: {
+                loadKeyRingImplementations();
             }
             case OPERATION_GET_IDENTITIES: {
                 LOG.info("Received get Identities request.");
                 int start = 0;
                 int identitiesNumber = 10; // default
-                if(DLC.getValue("identitiesStart", e)!=null) {
+                DID.Type type = DID.Type.IDENTITY;
+                if(nonNull(e.getValue("identitiesStart"))) {
                     start = Integer.parseInt((String)e.getValue("identitiesStart"));
                 }
-                if(DLC.getValue("identitiesNumber", e)!=null) {
+                if(nonNull(e.getValue("identitiesNumber"))) {
                     identitiesNumber = Integer.parseInt((String)e.getValue("identitiesNumber"));
                     if(identitiesNumber > MAX_IDENTITIES) {
                         identitiesNumber = MAX_IDENTITIES;
                     }
                 }
-                List<DID> identities = loadIdentities(start, identitiesNumber, false);
+                if(nonNull(e.getValue("identityType"))) {
+                    type = DID.Type.valueOf((String)e.getValue("identityType"));
+                }
+                List<DID> identities = loadRange(start, identitiesNumber, type);
                 e.addNVP("identities", identities);
                 break;
             }
+            case OPERATION_GET_IDENTITY: {
+                LOG.info("Received get Identity request.");
+                String username = (String)e.getValue("username");
+                DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
+                DID did = load(username, type);
+                if(nonNull(did))
+                    e.addData(DID.class, did);
+                break;
+            }
             case OPERATION_VERIFY_IDENTITY: {
-                DID verified;
-                DID did = e.getDID();
                 LOG.info("Received verify DID request.");
-                // Node DID needs to be verified first
-                DID didLoaded = loadIdentity(did.getPublicKey().getFingerprint(), nodeDID==null, false);
-                if(did.getPublicKey().getFingerprint() != null
-                        && did.getPublicKey().getFingerprint().equals(didLoaded.getPublicKey().getFingerprint())) {
-                    didLoaded.setVerified(true);
-                    LOG.info("DID verification successful.");
-                    verified = didLoaded;
-                } else {
-                    did.setVerified(false);
-                    LOG.info("DID verification unsuccessful.");
-                    verified = did;
-                }
-                e.setDID(verified);
+                String username = (String)e.getValue("username");
+                DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
+                DID did = load(username, type);
+                e.addNVP("verified", isNull(did));
                 break;
             }
             case OPERATION_AUTHENTICATE: {
-                LOG.info("Received authn DID request.");
+                LOG.info("Received authn request.");
                 AuthenticateDIDRequest r = (AuthenticateDIDRequest)e.getData(AuthenticateDIDRequest.class);
-                if(r == null) {
-                    LOG.warning("Request required.");
+                if(isNull(r)) {
                     r = new AuthenticateDIDRequest();
                     r.statusCode = AuthenticateDIDRequest.REQUEST_REQUIRED;
                     e.addNVP("authN",r);
                     break;
                 }
-                if(r.did == null) {
-                    LOG.warning("DID required.");
-                    r.statusCode = AuthenticateDIDRequest.DID_REQUIRED;
+                if(isNull(r.username)) {
+                    r.statusCode = AuthenticateDIDRequest.USERNAME_REQUIRED;
                     break;
                 }
-                if(r.did.getPublicKey().getFingerprint() == null) {
-                    LOG.info("Fingerprint required.");
-                    r.statusCode = AuthenticateDIDRequest.DID_FINGERPRINT_REQUIRED;
+                if(isNull(r.passphrase)) {
+                    r.statusCode = AuthenticateDIDRequest.PASSPHRASE_REQUIRED;
                     break;
                 }
-                if(r.did.getPassphrase() == null) {
-                    LOG.info("Passphrase required.");
-                    r.statusCode = AuthenticateDIDRequest.DID_PASSPHRASE_REQUIRED;
-                    break;
+                if(isNull(r.type)) {
+                    r.type = DID.Type.IDENTITY;
                 }
-                AuthNRequest ar = (AuthNRequest)e.getData(AuthNRequest.class);
-                GenerateKeyRingCollectionsRequest gkr = (GenerateKeyRingCollectionsRequest) e.getData(GenerateKeyRingCollectionsRequest.class);
-                if(ar!=null && ar.identityPublicKey!=null)
-                    r.did.setPublicKey(ar.identityPublicKey);
-                else if(gkr!=null && gkr.identityPublicKey!=null)
-                    r.did.setPublicKey(gkr.identityPublicKey);
-                authenticateIdentity(r, nodeDID == null);
-                if(r.did.getAuthenticated()) {
-                    LOG.info("DID Authenticated, setting DID in header.");
-                    if(nodeDID==null) {
-                        // first authentication is the node itself
-                        LOG.info("First authn is node.");
-                        nodeDID = r.did;
-                        nodeDID.setVerified(true);
-                        nodeDID.setStatus(DID.Status.ACTIVE);
-                        saveIdentity(r.did, true,false, false);
-                        e.setDID(r.did);
+                DID did = load(r.username, r.type);
+                try {
+                    if(nonNull(did)
+                            && nonNull(did.getPassphraseHash())
+                            && HashUtil.verifyPasswordHash(r.passphrase, did.getPassphraseHash().getHash())) {
+                        e.addData(DID.class, did);
                     } else {
-                        if(activeIdentity!=null) {
-                            activeIdentity.setStatus(DID.Status.INACTIVE);
-                            saveIdentity(activeIdentity,  true,false, false);
-                        }
-                        activeIdentity = r.did;
-                        activateIdentity(activeIdentity);
-                        LOG.info("Active identity updated.");
+                        e.addNVP("authN", false);
                     }
-                } else if(r.statusCode == AuthenticateDIDRequest.DID_USERNAME_UNKNOWN && r.autogenerate) {
-                    LOG.info("Username unknown and autogenerate is true so save DID as authenticated...");
-                    r.did.setAuthenticated(true); // true because we're going to create it
-                    r.did.setVerified(true);
-                    r.did.setStatus(DID.Status.ACTIVE);
-                    e.setDID(r.did);
-                    if(r.isNode) {
-                        nodeDID = r.did;
-                        saveIdentity(nodeDID, r.autogenerate, true, false);
-                        LOG.info("Node identity saved.");
-                    } else {
-                        activeIdentity = r.did;
-                        activateIdentity(activeIdentity);
-                        LOG.info("Active identity saved.");
-                    }
+                } catch (NoSuchAlgorithmException e1) {
+                    LOG.warning(e1.getLocalizedMessage());
                 }
                 break;
             }
             case OPERATION_SAVE_IDENTITY: {
                 LOG.info("Received save DID request.");
-                DID did = (DID)e.getData(DID.class);
-                if(did!=null) {
-                    saveIdentity(did, true, false, false);
+                Map<String,Object> m = (Map<String,Object>)e.getData(DID.class);
+                if(isNull(m)) {
+                    e.addErrorMessage("No DID to Save.");
+                    break;
                 }
-                break;
-            }
-            case OPERATION_AUTHENTICATE_CREATE: {
-                AuthenticateDIDRequest r = (AuthenticateDIDRequest)e.getData(AuthenticateDIDRequest.class);
-                authenticateOrCreateIdentity(r);
+                DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
+                String location = null;
+                if(nonNull(e.getValue("identityLocation")))
+                    location = (String)e.getValue("identityLocation");
+                DID did = new DID();
+                did.fromMap(m);
+                saveDID(did, type, location);
                 break;
             }
             case OPERATION_DELETE_IDENTITY: {
-                String fingerprint = (String)e.getValue("fingerprint");
-                Boolean success = identitiesDB.delete(fingerprint);
+                String username = (String)e.getValue("username");
+                Boolean success = identitiesDB.delete(username);
                 e.addNVP("delete-success",success.toString());
                 break;
             }
             case OPERATION_ADD_CONTACT: {
                 LOG.info("Received add Contact request.");
-                e.addNVP("contact", saveContact((DID)e.getValue("contact"), true, false));
+                e.addNVP("contact", saveDID((DID)e.getValue("contact"), DID.Type.CONTACT, null));
                 break;
             }
             case OPERATION_GET_CONTACT: {
                 LOG.info("Received get Contact request.");
-                String fingerprint = ((TextMessage) e.getMessage()).getText();
-                DID contact = loadContact(fingerprint, false);
+                String username = ((TextMessage) e.getMessage()).getText();
+                DID contact = load(username, DID.Type.CONTACT);
                 e.addNVP("contact", contact);
                 break;
             }
@@ -316,26 +713,13 @@ public class DIDService extends BaseService {
         }
     }
 
-    private void activateIdentity(DID activeDID) {
-        List<DID> dids = loadIdentities(1, MAX_IDENTITIES, false);
-        for(DID did : dids) {
-            if(did.getPublicKey().getFingerprint().equals(activeDID.getPublicKey().getFingerprint())) {
-                activeDID.setStatus(DID.Status.ACTIVE);
-                saveIdentity(activeDID, false, false, false);
-            } else if(did.getStatus()==DID.Status.ACTIVE) {
-                did.setStatus(DID.Status.INACTIVE);
-                saveIdentity(did, false, false, false);
-            }
-        }
-    }
-
     /**
-     * Saves and returns Identity DID generating passphrase hash if none exists.
+     * Saves DID
      * @param did DID
      */
-    private DID saveIdentity(DID did, boolean autoCreate, boolean isNode, boolean toExternal) {
-        LOG.info("Saving Identity DID...");
-        if(did.getPassphraseHash() == null) {
+    private boolean saveDID(DID did, DID.Type type, String location) {
+        LOG.info("Saving DID...");
+        if(nonNull(did.getPassphrase())) {
             LOG.info("Hashing passphrase...");
             try {
                 did.setPassphraseHash(new Hash(HashUtil.generatePasswordHash(did.getPassphrase()), Hash.Algorithm.PBKDF2WithHmacSHA1));
@@ -343,162 +727,80 @@ public class DIDService extends BaseService {
                 did.setPassphrase(null);
             } catch (NoSuchAlgorithmException ex) {
                 LOG.warning("Hashing Algorithm not supported while saving DID\n" + ex.getLocalizedMessage());
-                return did;
+                return false;
             }
         }
-            JSON json = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getPublicKey().getFingerprint(), false, false);
-            json.setLocation(getServiceDirectory()+IDENTITY_DIR+did.getPublicKey().getFingerprint());
-            InfoVault iv = new InfoVault();
-            iv.content = json;
-            iv.storeExternal = toExternal;
-            iv.autoCreate = autoCreate;
-            if(isNode) {
-                nodesDB.save(iv);
-                LOG.info("Node Identity DID saved.");
-            } else {
-                identitiesDB.save(iv);
-                LOG.info("Identity DID saved.");
-            }
-        return did;
-    }
 
-    /**
-     * Authenticates passphrase
-     * @param r AuthenticateDIDRequest
-     */
-    private void authenticateIdentity(AuthenticateDIDRequest r, boolean isNode) {
-        DID loadedDID = loadIdentity(r.did.getPublicKey().getFingerprint(), isNode, false);
-        if(loadedDID==null) {
-            r.did.setAuthenticated(false);
-            r.statusCode = AuthenticateDIDRequest.DID_USERNAME_UNKNOWN;
-            return;
-        }
-        if(loadedDID.getPassphraseHash()==null) {
-            if(r.autogenerate) {
-                r.did.setVerified(true);
-                r.did.setAuthenticated(true);
-                loadedDID = saveIdentity(r.did, true, isNode, false);
-                LOG.info("Saved Identity DID: " + loadedDID);
-            } else {
-                LOG.warning("Unable to load DID and autogenerate=false. Authentication failed.");
-                r.statusCode = AuthenticateDIDRequest.DID_USERNAME_UNKNOWN;
-                return;
-            }
-        } else {
-            LOG.info("Loaded Identity DID: "+loadedDID);
-            Boolean authN = null;
-            LOG.info("Verifying password hash...");
-            try {
-                authN = HashUtil.verifyPasswordHash(r.did.getPassphrase(), loadedDID.getPassphraseHash().getHash());
-            } catch (NoSuchAlgorithmException e) {
-                e.printStackTrace();
-                LOG.warning(e.getLocalizedMessage());
-            }
-            LOG.info("AuthN: "+(authN != null && authN));
-            r.did.setAuthenticated(authN != null && authN);
-        }
-        if(r.did.getAuthenticated()) {
-            r.did = loadedDID;
-            activeIdentity = loadedDID;
-        }
-    }
-
-    private void authenticateOrCreateIdentity(AuthenticateDIDRequest r) {
-        boolean isNode = nodeDID == null;
-        DID result;
-        LOG.info("Received verify DID request.");
-        DID didLoaded = loadIdentity(r.did.getPublicKey().getFingerprint(), isNode, false);
-        if(r.did.getPublicKey().getFingerprint() != null
-                && r.did.getPublicKey().getFingerprint().equals(didLoaded.getPublicKey().getFingerprint())) {
-            didLoaded.setVerified(true);
-            LOG.info("DID verification successful.");
-            result = didLoaded;
-        } else {
-            r.did.setVerified(false);
-            LOG.info("DID verification unsuccessful.");
-            result = r.did;
-        }
-        r.did = result;
-        if(!r.did.getVerified()) {
-            saveIdentity(r.did, true, isNode, false);
-        } else {
-            authenticateIdentity(r, isNode);
-        }
-        if(isNode) {
-            nodeDID = r.did;
-        }
-    }
-
-    private boolean isNewIdentity(String alias, boolean isNode, boolean fromExternal) {
-        DID loadedDID = loadIdentity(alias, isNode, fromExternal);
-        return loadedDID == null || loadedDID.getUsername() == null || loadedDID.getUsername().isEmpty();
-    }
-
-    private DID loadIdentity(String fingerprint, boolean isNode, boolean fromExternal) {
-        InfoVault iv = isNode ? nodesDB.load(fingerprint) : identitiesDB.load(fingerprint);
-        DID did = new DID();
-        did.fromMap(iv.content.toMap());
-        LOG.info("JSON loaded: "+iv.content.toJSON());
-        LOG.info("Identity DID Loaded from map.");
-        return did;
-    }
-
-    private List<DID> loadIdentities(int start, int numberIdentities, boolean fromExternal) {
-        List<DID> dList = new ArrayList<>();
-        List<InfoVault> infoVaults = new ArrayList<>();
-        boolean success = identitiesDB.loadRange(start, numberIdentities, infoVaults);
-        if(!success) {
-            LOG.warning("Loading identities failed.");
-            return dList;
-        }
-        DID did;
-        for(InfoVault iv: infoVaults) {
-            did = new DID();
-            did.fromMap(iv.content.toMap());
-            dList.add(did);
-        }
-        return dList;
-    }
-
-    /**
-     * Saves and returns Contact DID.
-     * @param did DID
-     */
-    private DID saveContact(DID did, boolean autoCreate, boolean storeExternal) {
-        LOG.info("Saving Contact DID...");
         InfoVault iv = new InfoVault();
-        iv.content = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getPublicKey().getFingerprint(), false, false);
-        iv.content.setLocation(getServiceDirectory()+CONTACT_DIR+did.getPublicKey().getFingerprint());
-        iv.autoCreate = autoCreate;
-        iv.storeExternal = storeExternal;
-        contactsDB.save(iv);
-        LOG.info("Contact DID saved.");
-        return did;
+        iv.content = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getUsername(), false, false);
+        if(isNull(location))
+            iv.content.setLocation(getServiceDirectory()+type.name()+"/"+did.getUsername()+".json");
+        else
+            iv.content.setLocation(location + (location.endsWith("/") ? "" : "/") + type.name() + "/" + did.getUsername()+".json");
+        switch (type) {
+            case NODE: return nodesDB.save(iv);
+            case CONTACT: return contactsDB.save(iv);
+            case IDENTITY: return identitiesDB.save(iv);
+            default: return false;
+        }
     }
 
-    private DID loadContact(String fingerprint, boolean fromExternal) {
+    private DID load(String username, DID.Type type) {
         DID loadedDID = new DID();
-        InfoVault iv = contactsDB.load(fingerprint);
-        loadedDID.fromMap(iv.content.toMap());
-        LOG.info("JSON loaded: "+iv.content.toJSON());
-        LOG.info("Contact DID Loaded from map.");
-        return loadedDID;
+        InfoVault iv = null;
+        switch (type) {
+            case NODE: iv = nodesDB.load(username);break;
+            case CONTACT: iv = contactsDB.load(username);break;
+            case IDENTITY: iv = identitiesDB.load(username);break;
+        }
+        if(nonNull(iv)) {
+            loadedDID.fromMap(iv.content.toMap());
+            LOG.info("JSON loaded: " + iv.content.toJSON());
+            LOG.info("DID Loaded from map.");
+            return loadedDID;
+        }
+        return null;
     }
 
-    private List<DID> loadContactRange(int begin, int numberEntries) {
+    private List<DID> loadRange(int begin, int numberEntries, DID.Type type) {
         List<DID> loadedDIDs = new ArrayList<>();
         List<InfoVault> infoVaults = new ArrayList<>();
         DID did;
-        if(contactsDB.loadRange(begin, numberEntries, infoVaults)) {
+        InfoVaultDB db;
+        switch (type) {
+            case CONTACT: db = contactsDB;break;
+            case NODE: db = nodesDB;break;
+            default: db = identitiesDB;
+        }
+        if(db.loadRange(begin, numberEntries, infoVaults)) {
             for (InfoVault iv : infoVaults) {
                 did = new DID();
                 did.fromMap(iv.content.toMap());
-                LOG.info("JSON loaded: " + iv.content.toJSON());
                 loadedDIDs.add(did);
-                LOG.info("Contact DID Loaded from map.");
             }
         }
         return loadedDIDs;
+    }
+
+    private void loadKeyRingImplementations(){
+        keyRings.clear();
+        KeyRing keyRing;
+        if(properties.getProperty("ra.keyring.KeyRings") == null) {
+            keyRing = new OpenPGPKeyRing(); // Default
+            if(keyRing.init(properties))
+                keyRings.put(OpenPGPKeyRing.class.getName(), keyRing);
+        } else {
+            String[] keyRingStrings = properties.getProperty("ra.keyring.KeyRings").split(",");
+            for (String keyRingString : keyRingStrings) {
+                try {
+                    keyRing = (KeyRing) Class.forName(keyRingString).getConstructor().newInstance();
+                    if(keyRing.init(properties))
+                        keyRings.put(keyRingString, keyRing);
+                } catch (Exception e) {
+                    LOG.warning(e.getLocalizedMessage());
+                }
+            }
+        }
     }
 
     @Override
@@ -506,13 +808,19 @@ public class DIDService extends BaseService {
         super.start(properties);
         LOG.info("Starting....");
         updateStatus(ServiceStatus.STARTING);
+        this.properties = properties;
+        // Android apps set SpongyCastle as the default provider
+        if(!SystemVersion.isAndroid()) {
+            Security.addProvider(new BouncyCastleProvider());
+        }
+        loadKeyRingImplementations();
         // TODO: Support external drives (InfoVault)
         nodesDB = new InfoVaultFileDB();
-        nodesDB.setBaseURL(new File(getServiceDirectory(),NODE_DIR).getAbsolutePath());
+        nodesDB.setBaseURL(new File(getServiceDirectory(),DID.Type.NODE.name()).getAbsolutePath());
         identitiesDB = new InfoVaultFileDB();
-        identitiesDB.setBaseURL(new File(getServiceDirectory(),IDENTITY_DIR).getAbsolutePath());
+        identitiesDB.setBaseURL(new File(getServiceDirectory(),DID.Type.IDENTITY.name()).getAbsolutePath());
         contactsDB = new InfoVaultFileDB();
-        contactsDB.setBaseURL(new File(getServiceDirectory(),CONTACT_DIR).getAbsolutePath());
+        contactsDB.setBaseURL(new File(getServiceDirectory(),DID.Type.CONTACT.name()).getAbsolutePath());
         updateStatus(ServiceStatus.RUNNING);
         LOG.info("Started.");
         return true;

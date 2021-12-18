@@ -140,6 +140,20 @@ We share design goals from the [W3C spec](https://w3c-ccg.github.io/did-spec/#de
 ## Features and Roadmap
 The DID Service is being implemented as individual projects needs arise.
 
-### 0.6.2
+SHA-1 is used throughout while still in testing mode. Will move to SHA-256
+prior to production release.
+
+### TBD
 - Adding Reputation support for signers signing attributes of signees.
+
+### 1.2
+- Converging with KeyRingService.
+- Beginning of YubiKey integration.
+
+### 1.1
+- Symmetric Encryption/Decryption
+
+### 1.0
+- OpenPGP Key Rings Collections Generation, Key Rings Creation/Deletion, Encryption, Decryption, Signing, Verify Signatures.
+- Keys persisted locally.
 
