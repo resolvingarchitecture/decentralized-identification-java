@@ -1,6 +1,7 @@
 package ra.did;
 
 import ra.common.content.Content;
+import ra.common.identity.DID;
 
 public class DecryptRequest extends DIDRequest {
 
@@ -13,6 +14,7 @@ public class DecryptRequest extends DIDRequest {
     public String location;
     public String keyRingUsername;
     public String keyRingPassphrase;
+    public DID.Type type;
     public String alias;
     public Content content;
     public Boolean passphraseOnly = false;

@@ -1,11 +1,12 @@
 package ra.did;
 
 import org.junit.jupiter.api.*;
-import ra.common.DLC;
 import ra.common.Envelope;
 import ra.common.content.Text;
+import ra.common.identity.DID;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.Properties;
 import java.util.logging.Logger;
@@ -23,11 +24,8 @@ public class DIDServiceTest {
     private static Properties props;
     private static boolean serviceRunning = false;
 
-    private static String keyRingUsername = "AnonMasterTest";
-    private static String keyRingPassphrase = "1234";
-    private static String alias = "AnonTest1";
-    private static String aliasPassphrase = "5678";
-    private static String keyRingImplementation = OpenPGPKeyRing.class.getName();
+    private static String username = "AnonMasterTest";
+    private static String passphrase = "1234";
     private static String content = "Key Ring Service Test";
 
     @BeforeAll
@@ -55,20 +53,21 @@ public class DIDServiceTest {
     @Order(2)
     public void generateKeyRingsCollectionTest() {
         GenerateKeyRingCollectionsRequest req = new GenerateKeyRingCollectionsRequest();
-        req.keyRingImplementation = keyRingImplementation;
-        req.keyRingUsername = keyRingUsername;
-        req.keyRingPassphrase = keyRingPassphrase;
+        req.keyRingImplementation = OpenPGPKeyRing.class.getName();
+        req.keyRingUsername = username;
+        req.keyRingPassphrase = passphrase;
         req.hashStrength = HASH_STRENGTH_64;
+        req.type = DID.Type.IDENTITY;
         Envelope e = Envelope.documentFactory();
-        DLC.addData(GenerateKeyRingCollectionsRequest.class, req, e);
-        DLC.addRoute(DIDService.class.getName(), DIDService.OPERATION_GENERATE_KEY_RINGS_COLLECTIONS, e);
+        e.addData(GenerateKeyRingCollectionsRequest.class, req);
+        e.addRoute(DIDService.class.getName(), DIDService.OPERATION_GENERATE_KEY_RINGS_COLLECTIONS);
         // Ratchet route
         e.setRoute(e.getDynamicRoutingSlip().nextRoute());
-        File pkf = new File(service.getServiceDirectory(), req.keyRingUsername+".pkr");
+        File pkf = new File(service.getServiceDirectory()+"/"+req.type.name(), req.keyRingUsername+".pkr");
         if(pkf.exists()) {
             assertTrue(pkf.delete());
         }
-        File skf = new File(service.getServiceDirectory(), req.keyRingUsername+".skr");
+        File skf = new File(service.getServiceDirectory()+"/"+req.type.name(), req.keyRingUsername+".skr");
         if(skf.exists()) {
             assertTrue(skf.delete());
         }
@@ -76,123 +75,177 @@ public class DIDServiceTest {
         service.handleDocument(e);
         long end = new Date().getTime();
         LOG.info("Key generation took: "+(end-start)+" ms.");
-        assertTrue(pkf.exists());
-        assertTrue(skf.exists());
-        assertTrue((end-start) < 30000); // < 30 seconds
+        assert(req.successful);
+        assert(pkf.exists());
+        assert(skf.exists());
+        assert((end-start) < 30000); // < 30 seconds
     }
 
-    @Test
-    @Order(3)
-    public void generateKeyRingsTest() {
-        GenerateKeyRingRequest req = new GenerateKeyRingRequest();
-        req.keyRingImplementation = keyRingImplementation;
-        req.keyRingUsername = keyRingUsername;
-        req.keyRingPassphrase = keyRingPassphrase;
-        req.alias = alias;
-        req.aliasPassphrase = aliasPassphrase;
-        Envelope e = Envelope.documentFactory();
-        DLC.addData(GenerateKeyRingRequest.class, req, e);
-        DLC.addRoute(DIDService.class.getName(), DIDService.OPERATION_GENERATE_KEY_RINGS, e);
-        // Ratchet Route
-        e.setRoute(e.getDynamicRoutingSlip().nextRoute());
-        File pkf = new File(service.getServiceDirectory(), req.keyRingUsername+".pkr");
-        if(pkf.exists()) {
-            assertTrue(pkf.delete());
-        }
-        File skf = new File(service.getServiceDirectory(), req.keyRingUsername+".skr");
-        if(skf.exists()) {
-            assertTrue(skf.delete());
-        }
-        long start = new Date().getTime();
-        service.handleDocument(e);
-        long end = new Date().getTime();
-        LOG.info("Key generation took: "+(end-start)+" ms.");
-        assertTrue(pkf.exists());
-        assertTrue(skf.exists());
-        assertTrue((end-start) < 30000); // < 30 seconds
-    }
+//    @Test
+//    @Order(3)
+//    public void generateKeyRingsTest() {
+//        GenerateKeyRingRequest req = new GenerateKeyRingRequest();
+//        req.keyRingImplementation = OpenPGPKeyRing.class.getName();
+//        req.keyRingUsername = username;
+//        req.keyRingPassphrase = passphrase;
+//        req.alias = username;
+//        req.aliasPassphrase = passphrase;
+//        req.type = DID.Type.IDENTITY;
+//        Envelope e = Envelope.documentFactory();
+//        e.addData(GenerateKeyRingRequest.class, req);
+//        e.addRoute(DIDService.class.getName(), DIDService.OPERATION_GENERATE_KEY_RINGS);
+//        // Ratchet Route
+//        e.setRoute(e.getDynamicRoutingSlip().nextRoute());
+//        long start = new Date().getTime();
+//        service.handleDocument(e);
+//        long end = new Date().getTime();
+//        assert(req.successful);
+//        LOG.info("Key generation took: "+(end-start)+" ms.");
+//        assert((end-start) < 30000); // < 30 seconds
+//    }
 
     @Test
     @Order(4)
-    public void authenticationTest() {
-        AuthNKeyRingRequest req = new AuthNKeyRingRequest();
-        req.keyRingUsername = keyRingUsername;
-        req.keyRingPassphrase = keyRingPassphrase;
-        req.alias = alias;
-        req.aliasPassphrase = aliasPassphrase;
-        Envelope e = Envelope.documentFactory();
-        DLC.addData(AuthNKeyRingRequest.class, req, e);
-        DLC.addRoute(DIDService.class.getName(), DIDService.OPERATION_AUTHN_MASTER_RING, e);
-        // Ratchet Route
-        e.setRoute(e.getDynamicRoutingSlip().nextRoute());
-        File pkf = new File(service.getServiceDirectory(), req.keyRingUsername+".pkr");
-        if(pkf.exists()) {
-            assertTrue(pkf.delete());
-        }
-        File skf = new File(service.getServiceDirectory(), req.keyRingUsername+".skr");
-        if(skf.exists()) {
-            assertTrue(skf.delete());
-        }
-        long start = new Date().getTime();
-        service.handleDocument(e);
-        long end = new Date().getTime();
-        LOG.info("Authentication took: "+(end-start)+" ms.");
-        assertTrue(pkf.exists());
-        assertTrue(skf.exists());
-        assertTrue((end-start) < 30000); // < 30 seconds
-        assertTrue(req.identityPublicKey!=null && req.identityPublicKey.isIdentityKey() && req.identityPublicKey.getAlias()!=null && req.identityPublicKey.getAddress()!=null);
-    }
-
-    @Test
-    @Order(5)
     public void encryptionTest() {
         EncryptRequest encReq = new EncryptRequest();
-        encReq.keyRingUsername = keyRingUsername;
-        encReq.keyRingPassphrase = keyRingPassphrase;
-        encReq.publicKeyAlias = alias;
-        encReq.location = service.getServiceDirectory().getAbsolutePath();
+        encReq.keyRingImplementation = OpenPGPKeyRing.class.getName();
+        encReq.keyRingUsername = username;
+        encReq.keyRingPassphrase = passphrase;
+        encReq.publicKeyAlias = username;
+        encReq.type = DID.Type.IDENTITY;
         encReq.content = new Text();
         encReq.content.setBody(content.getBytes(), false, false);
         Envelope e = Envelope.documentFactory();
-        DLC.addData(EncryptRequest.class, encReq, e);
-        DLC.addRoute(DIDService.class.getName(), DIDService.OPERATION_ENCRYPT, e);
+        e.addData(EncryptRequest.class, encReq);
+        e.addRoute(DIDService.class.getName(), DIDService.OPERATION_ENCRYPT);
         // Ratchet Route
         e.setRoute(e.getDynamicRoutingSlip().nextRoute());
         long start = new Date().getTime();
         service.handleDocument(e);
         long end = new Date().getTime();
+        assert(encReq.successful);
         LOG.info("Encryption took: "+(end-start)+" ms.");
         String encContent = new String(encReq.content.getBody());
         LOG.info("Content: "+content+"; Encrypted: \n"+encContent);
         assertNotEquals(encContent, content);
-        assertTrue((end-start) < 30000); // < 30 seconds
+        assert((end-start) < 30000); // < 30 seconds
 
         DecryptRequest decReq = new DecryptRequest();
-        decReq.keyRingUsername = keyRingUsername;
-        decReq.keyRingPassphrase = keyRingPassphrase;
-        decReq.alias = alias;
-        decReq.location = service.getServiceDirectory().getAbsolutePath();
+        decReq.keyRingImplementation = OpenPGPKeyRing.class.getName();
+        decReq.keyRingUsername = username;
+        decReq.keyRingPassphrase = passphrase;
+        decReq.alias = username;
+        decReq.type = DID.Type.IDENTITY;
         decReq.content = encReq.content;
         Envelope e2 = Envelope.documentFactory();
-        DLC.addData(DecryptRequest.class, decReq, e2);
-        DLC.addRoute(DIDService.class.getName(), DIDService.OPERATION_DECRYPT, e2);
+        e2.addData(DecryptRequest.class, decReq);
+        e2.addRoute(DIDService.class.getName(), DIDService.OPERATION_DECRYPT);
         // Ratchet Route
         e2.setRoute(e2.getDynamicRoutingSlip().nextRoute());
         start = new Date().getTime();
         service.handleDocument(e2);
         end = new Date().getTime();
+        assert(decReq.successful);
         LOG.info("Decryption took: "+(end-start)+" ms.");
         assertEquals(new String(decReq.content.getBody()), content);
-        assertTrue((end-start) < 30000); // < 30 seconds
+        assert((end-start) < 30000); // < 30 seconds
+    }
+
+    @Test
+    @Order(5)
+    public void signageTest() {
+        SignRequest signRequest = new SignRequest();
+        signRequest.keyRingImplementation = OpenPGPKeyRing.class.getName();
+        signRequest.keyRingUsername = username;
+        signRequest.keyRingPassphrase = passphrase;
+        signRequest.alias = username;
+        signRequest.passphrase = passphrase;
+        signRequest.type = DID.Type.IDENTITY;
+        signRequest.contentToSign = content.getBytes(StandardCharsets.UTF_8);
+        Envelope e = Envelope.documentFactory();
+        e.addData(SignRequest.class, signRequest);
+        e.addRoute(DIDService.class.getName(), DIDService.OPERATION_SIGN);
+        // Ratchet Route
+        e.setRoute(e.getDynamicRoutingSlip().nextRoute());
+        long start = new Date().getTime();
+        service.handleDocument(e);
+        long end = new Date().getTime();
+        assert(signRequest.successful);
+        LOG.info("Signing took: "+(end-start)+" ms.");
+        assertNotNull(signRequest.signature);
+
+        VerifySignatureRequest verifySignatureRequest = new VerifySignatureRequest();
+        verifySignatureRequest.keyRingImplementation = OpenPGPKeyRing.class.getName();
+        verifySignatureRequest.keyRingUsername = username;
+        verifySignatureRequest.keyRingPassphrase = passphrase;
+        verifySignatureRequest.alias = username;
+        verifySignatureRequest.type = DID.Type.IDENTITY;
+        verifySignatureRequest.contentSigned = content.getBytes(StandardCharsets.UTF_8);
+        verifySignatureRequest.signature = signRequest.signature;
+        Envelope e2 = Envelope.documentFactory();
+        e2.addData(VerifySignatureRequest.class, verifySignatureRequest);
+        e2.addRoute(DIDService.class.getName(), DIDService.OPERATION_VERIFY_SIGNATURE);
+        // Ratchet Route
+        e2.setRoute(e2.getDynamicRoutingSlip().nextRoute());
+        start = new Date().getTime();
+        service.handleDocument(e2);
+        end = new Date().getTime();
+        assert(verifySignatureRequest.successful);
+        LOG.info("Signature verification took: "+(end-start)+" ms.");
+        assert(verifySignatureRequest.verified);
     }
 
     @Test
     @Order(6)
-    public void yubiKeyFindTest() {
-        Properties p = new Properties();
-        YubiKeyRing ring = new YubiKeyRing();
-        ring.init(p);
+    public void symmetricEncryptionTest() {
+        EncryptSymmetricRequest req1 = new EncryptSymmetricRequest();
+        req1.keyRingImplementation = OpenPGPKeyRing.class.getName();
+        Text txt = new Text(content.getBytes(StandardCharsets.UTF_8));
+        txt.setEncryptionPassphrase(passphrase);
+        req1.content = txt;
+        Envelope e = Envelope.documentFactory();
+        e.addData(EncryptSymmetricRequest.class, req1);
+        e.addRoute(DIDService.class.getName(), DIDService.OPERATION_ENCRYPT_SYMMETRIC);
+        // Ratchet Route
+        e.setRoute(e.getDynamicRoutingSlip().nextRoute());
+        long start = new Date().getTime();
+        service.handleDocument(e);
+        long end = new Date().getTime();
+        assert(req1.successful);
+        LOG.info("Symmetric encryption took: "+(end-start)+" ms.");
+        assertNotEquals(req1.content.getBody(), content.getBytes(StandardCharsets.UTF_8));
+        LOG.info("Encrypted body: \n\t"+new String(req1.content.getBody()));
 
+        DecryptSymmetricRequest req2 = new DecryptSymmetricRequest();
+        req2.keyRingImplementation = OpenPGPKeyRing.class.getName();
+        req2.content = txt;
+        Envelope e2 = Envelope.documentFactory();
+        e2.addData(DecryptSymmetricRequest.class, req2);
+        e2.addRoute(DIDService.class.getName(), DIDService.OPERATION_DECRYPT_SYMMETRIC);
+        // Ratchet Route
+        e2.setRoute(e2.getDynamicRoutingSlip().nextRoute());
+        start = new Date().getTime();
+        service.handleDocument(e2);
+        end = new Date().getTime();
+        assert(req2.successful);
+        LOG.info("Symmetric decryption took: "+(end-start)+" ms.");
+        assertEquals(new String(req1.content.getBody()), content);
+        LOG.info("Decrypted body: \n\t"+new String(req1.content.getBody()));
     }
+
+//    @Test
+//    @Order(7)
+//    public void vouchTest() {
+//
+//    }
+//
+//    @Test
+//    @Order(8)
+//    public void yubiKeyFindTest() {
+//        Properties p = new Properties();
+//        YubiKeyRing ring = new YubiKeyRing();
+//        ring.init(p);
+//
+//    }
 
 }

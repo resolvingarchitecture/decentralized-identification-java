@@ -73,15 +73,15 @@ public class OpenPGPKeyRing implements KeyRing {
      * @throws PGPException
      */
     @Override
-    public void generateKeyRingCollections(GenerateKeyRingCollectionsRequest r) throws PGPException {
+    public void generateKeyRingCollections(GenerateKeyRingCollectionsRequest r) throws PGPException, IOException {
         LOG.info("Generate Key Rings using OpenPGP request received.");
-
-        File skr = new File(r.location + (r.location.endsWith("/") ? "" : "/") + r.keyRingUsername+".skr");
-        File pkr = new File(r.location + (r.location.endsWith("/") ? "" : "/") + r.keyRingUsername+".pkr");
+        PGPPublicKeyRingCollection publicKeyRingCollection = null;
+        File skr = new File(r.location, r.keyRingUsername+".skr");
+        File pkr = new File(r.location, r.keyRingUsername+".pkr");
 
         // Check to see if key rings collections already exist.
         if(keyRingCollectionExists(r.location, r.keyRingUsername)) {
-            LOG.warning("KeyRing username taken: "+r.keyRingUsername);
+            LOG.info("KeyRing username taken: "+r.keyRingUsername);
             r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_USERNAME_TAKEN;
             return;
         }
@@ -89,7 +89,6 @@ public class OpenPGPKeyRing implements KeyRing {
         try {
             if(skr.createNewFile() && pkr.createNewFile()) {
                 PGPSecretKeyRingCollection secretKeyRingCollection = null;
-                PGPPublicKeyRingCollection publicKeyRingCollection = null;
 
                 PGPKeyRingGenerator krgen = generateKeyRingGenerator(r.keyRingUsername, r.keyRingPassphrase.toCharArray(), r.hashStrength);
 
@@ -133,19 +132,19 @@ public class OpenPGPKeyRing implements KeyRing {
                     r.encryptionPublicKey.isIdentityKey(encryptionPublicKey.isMasterKey());
                     r.encryptionPublicKey.isEncryptionKey(encryptionPublicKey.isEncryptionKey());
                 }
+                r.successful = true;
             }
             else {
                 LOG.warning("Unable to create new key rings.");
             }
         } catch (IOException ex) {
             LOG.warning("IOException caught while saving keys: "+ex.getLocalizedMessage());
-            ex.printStackTrace();
         }
     }
 
     private boolean keyRingCollectionExists(String location, String username) {
-        File skr = new File(location + (location.endsWith("/") ? "" : "/") + username+".skr");
-        File pkr = new File(location + (location.endsWith("/") ? "" : "/") + username+".pkr");
+        File skr = new File(location, username+".skr");
+        File pkr = new File(location, username+".pkr");
         return skr.exists() && pkr.exists();
     }
 
@@ -167,21 +166,23 @@ public class OpenPGPKeyRing implements KeyRing {
             req.keyRingImplementation = keyRingImpl;
             req.keyRingUsername = keyRingUsername;
             req.keyRingPassphrase = keyRingPassphrase;
-            req.hashStrength = HASH_STRENGTH_64;
+            req.hashStrength = hashStrength;
             generateKeyRingCollections(req);
         }
 
         PGPKeyRingGenerator krgen = generateKeyRingGenerator(alias, aliasPassphrase.toCharArray(), hashStrength);
 
-        PGPSecretKeyRingCollection secretKeyRingCollection = getSecretKeyRingCollection(location, keyRingUsername, keyRingPassphrase);
+        PGPSecretKeyRingCollection secretKeyRingCollection = getSecretKeyRingCollection(location, keyRingUsername);
         PGPSecretKeyRing secretKeyRing = krgen.generateSecretKeyRing();
         PGPSecretKeyRingCollection.addSecretKeyRing(secretKeyRingCollection, secretKeyRing);
-        saveSecretKeyRingCollection(secretKeyRingCollection, new File(location + (location.endsWith("/") ? "" : "/") + keyRingUsername+".skr"));
+        saveSecretKeyRingCollection(secretKeyRingCollection, new File(location, keyRingUsername+".skr"));
 
-        PGPPublicKeyRingCollection publicKeyRingCollection = getPublicKeyRingCollection(location, keyRingUsername, keyRingPassphrase);
+        PGPPublicKeyRingCollection publicKeyRingCollection = getPublicKeyRingCollection(location, keyRingUsername);
         PGPPublicKeyRing publicKeyRing = krgen.generatePublicKeyRing();
         PGPPublicKeyRingCollection.addPublicKeyRing(publicKeyRingCollection, publicKeyRing);
-        savePublicKeyRingCollection(publicKeyRingCollection, new File(location + (location.endsWith("/") ? "" : "/") + keyRingUsername+".pkr"));
+        savePublicKeyRingCollection(publicKeyRingCollection, new File(location, keyRingUsername+".pkr"));
+
+        Iterator<PGPPublicKey> publicKeyIterator = publicKeyRing.getPublicKeys();
     }
 
     /**
@@ -192,7 +193,7 @@ public class OpenPGPKeyRing implements KeyRing {
      */
     @Override
     public void encrypt(EncryptRequest r) throws IOException, PGPException {
-        PGPPublicKey publicKey = getPublicKey(getPublicKeyRingCollection(r.location, r.keyRingUsername, r.keyRingPassphrase), r.publicKeyAlias, false);
+        PGPPublicKey publicKey = getPublicKey(getPublicKeyRingCollection(r.location, r.keyRingUsername), r.publicKeyAlias, false);
         if(publicKey == null) {
             r.statusCode = EncryptRequest.PUBLIC_KEY_NOT_FOUND;
             return;
@@ -285,7 +286,7 @@ public class OpenPGPKeyRing implements KeyRing {
         PGPPrivateKey privKey = null;
         PGPEncryptedData pbe = null;
         PGPPublicKeyEncryptedData pked = null;
-        PGPSecretKeyRingCollection pgpSec = getSecretKeyRingCollection(r.location, r.keyRingUsername, r.keyRingPassphrase);
+        PGPSecretKeyRingCollection pgpSec = getSecretKeyRingCollection(r.location, r.keyRingUsername);
         while (privKey == null && it.hasNext()) {
             pbe = it.next();
             if(pbe instanceof PGPPublicKeyEncryptedData) {
@@ -345,7 +346,7 @@ public class OpenPGPKeyRing implements KeyRing {
 
     @Override
     public void sign(SignRequest r) throws IOException, PGPException {
-        PGPSecretKey secretKey = getSecretKey(getSecretKeyRingCollection(r.location, r.keyRingUsername, r.keyRingPassphrase), r.alias);
+        PGPSecretKey secretKey = getSecretKey(getSecretKeyRingCollection(r.location, r.keyRingUsername), r.alias);
         if(secretKey == null) {
             r.statusCode = SignRequest.SECRET_KEY_NOT_FOUND;
             return;
@@ -389,7 +390,7 @@ public class OpenPGPKeyRing implements KeyRing {
 
         PGPSignature sig = p3.get(0);
 
-        PGPPublicKey publicKey = getPublicKey(getPublicKeyRingCollection(r.location, r.keyRingUsername,r.keyRingPassphrase),r.fingerprint);
+        PGPPublicKey publicKey = getPublicKey(getPublicKeyRingCollection(r.location, r.keyRingUsername), r.alias, true);
         if(publicKey == null) {
             LOG.warning("Unable to find public key to verify signature.");
             r.verified = false;
@@ -411,7 +412,7 @@ public class OpenPGPKeyRing implements KeyRing {
         return false;
     }
 
-    public PGPPublicKeyRingCollection getPublicKeyRingCollection(String location, String username, String passphrase) throws IOException, PGPException {
+    public PGPPublicKeyRingCollection getPublicKeyRingCollection(String location, String username) throws IOException, PGPException {
         // TODO: Decrypt encrypted file
         return new PGPPublicKeyRingCollection(new FileInputStream(location + (location.endsWith("/") ? "" : "/") + username+".pkr"), new BcKeyFingerprintCalculator());
     }
@@ -473,7 +474,7 @@ public class OpenPGPKeyRing implements KeyRing {
         return c.getPublicKey(fingerprint);
     }
 
-    private PGPSecretKeyRingCollection getSecretKeyRingCollection(String location, String username, String passphrase) throws IOException, PGPException {
+    private PGPSecretKeyRingCollection getSecretKeyRingCollection(String location, String username) throws IOException, PGPException {
 //        return new PGPSecretKeyRingCollection(new FileInputStream(username+".skr"), new BcKeyFingerprintCalculator());
         return new PGPSecretKeyRingCollection(new FileInputStream(location + (location.endsWith("/") ? "" : "/") + username+".skr"), new JcaKeyFingerprintCalculator());
     }

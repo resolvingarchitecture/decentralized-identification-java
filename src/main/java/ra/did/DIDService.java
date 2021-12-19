@@ -23,7 +23,6 @@ import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.File;
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.util.*;
@@ -42,9 +41,10 @@ public class DIDService extends BaseService {
 
     private static final Logger LOG = Logger.getLogger(DIDService.class.getName());
 
+    // Generate Key Rings Collections (PKR, SKR - Account)
     public static final String OPERATION_GENERATE_KEY_RINGS_COLLECTIONS = "GENERATE_KEY_RINGS_COLLECTIONS";
-    public static final String OPERATION_GENERATE_KEY_RINGS = "GENERATE_KEY_RINGS";
-    public static final String OPERATION_AUTHN_MASTER_RING = "AUTHN_MASTER_RING";
+    // Generate Key Rings (Public/Private key set) for Alias (does not work)
+//    public static final String OPERATION_GENERATE_KEY_RINGS = "GENERATE_KEY_RINGS";
     public static final String OPERATION_ENCRYPT = "ENCRYPT";
     public static final String OPERATION_DECRYPT = "DECRYPT";
     public static final String OPERATION_ENCRYPT_SYMMETRIC = "ENCRYPT_SYMMETRIC";
@@ -119,13 +119,18 @@ public class DIDService extends BaseService {
                     e.addData(GenerateKeyRingCollectionsRequest.class, r);
                     break;
                 }
+                if(isNull(r.type)) {
+                    LOG.warning("KeyRing DID Type required.");
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
+                    break;
+                }
                 File f;
                 if(r.location == null || r.location.isEmpty()) {
                     // default
-                    f = getServiceDirectory();
+                    f = new File(getServiceDirectory(), r.type.name());
                     r.location = f.getAbsolutePath();
                 } else {
-                    f = new File(r.location);
+                    f = new File(r.location, r.type.name());
                 }
                 if(!f.exists() && !f.mkdir()) {
                     r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_LOCATION_INACCESSIBLE;
@@ -155,147 +160,68 @@ public class DIDService extends BaseService {
                         return;
                     }
                     keyRing.generateKeyRingCollections(r);
+                    r.successful = true;
                 } catch (Exception ex) {
                     r.exception = ex;
                 }
                 break;
             }
-            case OPERATION_AUTHN_MASTER_RING: {
-                AuthNKeyRingRequest r = (AuthNKeyRingRequest)e.getData(AuthNKeyRingRequest.class);
-                if(r==null) {
-                    r = new AuthNKeyRingRequest();
-                    r.statusCode = AuthNKeyRingRequest.REQUEST_REQUIRED;
-                    e.addData(AuthNKeyRingRequest.class, r);
-                    break;
-                }
-                File f;
-                if(r.location == null || r.location.isEmpty()) {
-                    // Set locally
-                    f = getServiceDirectory();
-                    r.location = f.getAbsolutePath();
-                } else {
-                    f = new File(r.location);
-                }
-                if(!f.exists() && !f.mkdir()) {
-                    r.statusCode = AuthNKeyRingRequest.KEYRING_LOCATION_INACCESSIBLE;
-                    break;
-                }
-                if(r.keyRingUsername == null) {
-                    LOG.warning("KeyRing username required.");
-                    r.statusCode = AuthNKeyRingRequest.KEY_RING_USERNAME_REQUIRED;
-                    break;
-                }
-                if(r.keyRingPassphrase == null) {
-                    LOG.warning("KeyRing passphrase required.");
-                    r.statusCode = AuthNKeyRingRequest.KEY_RING_PASSPHRASE_REQUIRED;
-                    break;
-                }
-                if(r.alias == null || r.alias.isEmpty()) {
-                    r.statusCode = AuthNKeyRingRequest.ALIAS_REQUIRED;
-                    break;
-                }
-                if(r.aliasPassphrase == null || r.aliasPassphrase.isEmpty()) {
-                    r.statusCode = AuthNKeyRingRequest.ALIAS_PASSPHRASE_REQUIRED;
-                    break;
-                }
-                if(r.keyRingImplementation == null) {
-                    r.keyRingImplementation = OpenPGPKeyRing.class.getName(); // Default
-                }
-                try {
-                    keyRing = keyRings.get(r.keyRingImplementation);
-                    if(keyRing == null) {
-                        LOG.warning("KeyRing implementation unknown: "+r.keyRingImplementation);
-                        r.statusCode = AuthNKeyRingRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
-                        return;
-                    }
-                    PGPPublicKeyRingCollection c = null;
-                    try {
-                        c = keyRing.getPublicKeyRingCollection(r.location, r.keyRingUsername, r.keyRingPassphrase);
-                    } catch (IOException e1) {
-                        LOG.info("No key ring collection found.");
-                        break;
-                    } catch (PGPException e1) {
-                        LOG.warning(e1.getLocalizedMessage());
-                        break;
-                    }
-
-                    PGPPublicKey identityPublicKey = keyRing.getPublicKey(c, r.alias, true);
-                    r.identityPublicKey = new PublicKey();
-                    r.identityPublicKey.setAlias(r.alias);
-                    r.identityPublicKey.setFingerprint(Base64.getEncoder().encodeToString(identityPublicKey.getFingerprint()));
-                    r.identityPublicKey.setAddress(Base64.getEncoder().encodeToString(identityPublicKey.getEncoded()));
-                    r.identityPublicKey.setBase64Encoded(true);
-                    r.identityPublicKey.setType("RSA2048");
-                    r.identityPublicKey.isEncryptionKey(identityPublicKey.isEncryptionKey());
-                    r.identityPublicKey.isIdentityKey(identityPublicKey.isMasterKey());
-                    LOG.info("Identity Public Key loaded: " + r.identityPublicKey);
-
-                    PGPPublicKey encryptionPublicKey = keyRing.getPublicKey(c, r.alias, false);
-                    r.encryptionPublicKey = new PublicKey();
-                    r.encryptionPublicKey.setAlias(r.alias);
-                    r.encryptionPublicKey.setFingerprint(Base64.getEncoder().encodeToString(encryptionPublicKey.getFingerprint()));
-                    r.encryptionPublicKey.setAddress(Base64.getEncoder().encodeToString(encryptionPublicKey.getEncoded()));
-                    r.encryptionPublicKey.setBase64Encoded(true);
-                    r.encryptionPublicKey.setType("RSA2048");
-                    r.encryptionPublicKey.isEncryptionKey(encryptionPublicKey.isEncryptionKey());
-                    r.encryptionPublicKey.isIdentityKey(encryptionPublicKey.isMasterKey());
-                    LOG.info("Encryption Public Key loaded: " + r.encryptionPublicKey);
-                } catch (Exception ex) {
-                    r.exception = ex;
-                    LOG.warning(ex.getLocalizedMessage());
-                }
-                break;
-            }
-            case OPERATION_GENERATE_KEY_RINGS: {
-                GenerateKeyRingRequest r = (GenerateKeyRingRequest)e.getData(GenerateKeyRingRequest.class);
-                if(r == null) {
-                    r = new GenerateKeyRingRequest();
-                    r.statusCode = GenerateKeyRingRequest.REQUEST_REQUIRED;
-                    break;
-                }
-                File f;
-                if(r.location == null || r.location.isEmpty()) {
-                    // Set locally
-                    f = getServiceDirectory();
-                    r.location = f.getAbsolutePath();
-                } else {
-                    f = new File(r.location);
-                }
-                if(!f.exists() && !f.mkdir()) {
-                    r.statusCode = GenerateKeyRingRequest.KEYRING_LOCATION_INACCESSIBLE;
-                    break;
-                }
-                if(r.keyRingUsername == null || r.keyRingUsername.isEmpty()) {
-                    r.statusCode = GenerateKeyRingRequest.KEYRING_USERNAME_REQUIRED;
-                    break;
-                }
-                if(r.keyRingPassphrase == null || r.keyRingPassphrase.isEmpty()) {
-                    r.statusCode = GenerateKeyRingRequest.KEYRING_PASSPHRASE_REQUIRED;
-                    break;
-                }
-                if(r.alias == null || r.alias.isEmpty()) {
-                    r.statusCode = GenerateKeyRingRequest.ALIAS_REQUIRED;
-                    break;
-                }
-                if(r.aliasPassphrase == null || r.aliasPassphrase.isEmpty()) {
-                    r.statusCode = GenerateKeyRingRequest.ALIAS_PASSPHRASE_REQUIRED;
-                    break;
-                }
-                if(r.keyRingImplementation == null)
-                    r.keyRingImplementation = OpenPGPKeyRing.class.getName(); // default
-                keyRing = keyRings.get(r.keyRingImplementation);
-                if(keyRing == null) {
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
-                    return;
-                }
-                try {
-                    keyRing.createKeyRings(r.location, r.keyRingUsername, r.keyRingPassphrase, r.alias, r.aliasPassphrase, r.hashStrength, r.keyRingImplementation);
-                } catch (Exception ex) {
-                    r.exception = ex;
-                    LOG.warning(ex.getLocalizedMessage());
-                }
-                break;
-            }
+//            case OPERATION_GENERATE_KEY_RINGS: {
+//                GenerateKeyRingRequest r = (GenerateKeyRingRequest)e.getData(GenerateKeyRingRequest.class);
+//                if(r == null) {
+//                    r = new GenerateKeyRingRequest();
+//                    r.statusCode = GenerateKeyRingRequest.REQUEST_REQUIRED;
+//                    break;
+//                }
+//                if(isNull(r.type)) {
+//                    LOG.warning("KeyRing DID Type required.");
+//                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
+//                    break;
+//                }
+//                File f;
+//                if(r.location == null || r.location.isEmpty()) {
+//                    // default
+//                    f = new File(getServiceDirectory(), r.type.name());
+//                    r.location = f.getAbsolutePath();
+//                } else {
+//                    f = new File(r.location, r.type.name());
+//                }
+//                if(!f.exists() && !f.mkdir()) {
+//                    r.statusCode = GenerateKeyRingRequest.KEYRING_LOCATION_INACCESSIBLE;
+//                    break;
+//                }
+//                if(r.keyRingUsername == null || r.keyRingUsername.isEmpty()) {
+//                    r.statusCode = GenerateKeyRingRequest.KEYRING_USERNAME_REQUIRED;
+//                    break;
+//                }
+//                if(r.keyRingPassphrase == null || r.keyRingPassphrase.isEmpty()) {
+//                    r.statusCode = GenerateKeyRingRequest.KEYRING_PASSPHRASE_REQUIRED;
+//                    break;
+//                }
+//                if(r.alias == null || r.alias.isEmpty()) {
+//                    r.statusCode = GenerateKeyRingRequest.ALIAS_REQUIRED;
+//                    break;
+//                }
+//                if(r.aliasPassphrase == null || r.aliasPassphrase.isEmpty()) {
+//                    r.statusCode = GenerateKeyRingRequest.ALIAS_PASSPHRASE_REQUIRED;
+//                    break;
+//                }
+//                if(r.keyRingImplementation == null)
+//                    r.keyRingImplementation = OpenPGPKeyRing.class.getName(); // default
+//                keyRing = keyRings.get(r.keyRingImplementation);
+//                if(keyRing == null) {
+//                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+//                    return;
+//                }
+//                try {
+//                    keyRing.createKeyRings(r.location, r.keyRingUsername, r.keyRingPassphrase, r.alias, r.aliasPassphrase, r.hashStrength, r.keyRingImplementation);
+//                    r.successful = true;
+//                } catch (Exception ex) {
+//                    r.exception = ex;
+//                    LOG.warning(ex.getLocalizedMessage());
+//                }
+//                break;
+//            }
             case OPERATION_ENCRYPT: {
                 EncryptRequest r = (EncryptRequest)e.getData(EncryptRequest.class);
                 if(r == null) {
@@ -304,11 +230,19 @@ public class DIDService extends BaseService {
                     e.addData(EncryptRequest.class, r);
                     break;
                 }
-                if(r.location == null) {
-                    r.statusCode = EncryptRequest.LOCATION_REQUIRED;
+                if(isNull(r.type)) {
+                    LOG.warning("KeyRing DID Type required.");
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
                     break;
                 }
-                File f = new File(r.location);
+                File f;
+                if(r.location == null || r.location.isEmpty()) {
+                    // default
+                    f = new File(getServiceDirectory(), r.type.name());
+                    r.location = f.getAbsolutePath();
+                } else {
+                    f = new File(r.location, r.type.name());
+                }
                 if(!f.exists() && !f.mkdir()) {
                     r.statusCode = EncryptRequest.LOCATION_INACCESSIBLE;
                     break;
@@ -328,6 +262,7 @@ public class DIDService extends BaseService {
                 }
                 try {
                     keyRing.encrypt(r);
+                    r.successful = true;
                 } catch (Exception ex) {
                     r.exception = ex;
                     LOG.warning(ex.getLocalizedMessage());
@@ -342,11 +277,19 @@ public class DIDService extends BaseService {
                     e.addData(DecryptRequest.class, r);
                     break;
                 }
-                if(r.location == null) {
-                    r.statusCode = DecryptRequest.LOCATION_REQUIRED;
+                if(isNull(r.type)) {
+                    LOG.warning("KeyRing DID Type required.");
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
                     break;
                 }
-                File f = new File(r.location);
+                File f;
+                if(r.location == null || r.location.isEmpty()) {
+                    // default
+                    f = new File(getServiceDirectory(), r.type.name());
+                    r.location = f.getAbsolutePath();
+                } else {
+                    f = new File(r.location, r.type.name());
+                }
                 if(!f.exists() && !f.mkdir()) {
                     r.statusCode = DecryptRequest.LOCATION_INACCESSIBLE;
                     break;
@@ -358,6 +301,7 @@ public class DIDService extends BaseService {
                 }
                 try {
                     keyRing.decrypt(r);
+                    r.successful = true;
                 } catch (Exception ex) {
                     r.exception = ex;
                     LOG.warning(ex.getLocalizedMessage());
@@ -372,11 +316,19 @@ public class DIDService extends BaseService {
                     e.addData(SignRequest.class, r);
                     break;
                 }
-                if(r.location == null) {
-                    r.statusCode = SignRequest.LOCATION_REQUIRED;
+                if(isNull(r.type)) {
+                    LOG.warning("KeyRing DID Type required.");
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
                     break;
                 }
-                File f = new File(r.location);
+                File f;
+                if(r.location == null || r.location.isEmpty()) {
+                    // default
+                    f = new File(getServiceDirectory(), r.type.name());
+                    r.location = f.getAbsolutePath();
+                } else {
+                    f = new File(r.location, r.type.name());
+                }
                 if(!f.exists() && !f.mkdir()) {
                     r.statusCode = SignRequest.LOCATION_INACCESSIBLE;
                     break;
@@ -388,6 +340,7 @@ public class DIDService extends BaseService {
                 }
                 try {
                     keyRing.sign(r);
+                    r.successful = true;
                 } catch (Exception ex) {
                     r.exception = ex;
                     LOG.warning(ex.getLocalizedMessage());
@@ -402,11 +355,19 @@ public class DIDService extends BaseService {
                     e.addData(VerifySignatureRequest.class, r);
                     break;
                 }
-                if(r.location == null) {
-                    r.statusCode = VerifySignatureRequest.LOCATION_REQUIRED;
+                if(isNull(r.type)) {
+                    LOG.warning("KeyRing DID Type required.");
+                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
                     break;
                 }
-                File f = new File(r.location);
+                File f;
+                if(r.location == null || r.location.isEmpty()) {
+                    // default
+                    f = new File(getServiceDirectory(), r.type.name());
+                    r.location = f.getAbsolutePath();
+                } else {
+                    f = new File(r.location, r.type.name());
+                }
                 if(!f.exists() && !f.mkdir()) {
                     r.statusCode = VerifySignatureRequest.LOCATION_INACCESSIBLE;
                     break;
@@ -418,6 +379,7 @@ public class DIDService extends BaseService {
                 }
                 try {
                     keyRing.verifySignature(r);
+                    r.successful = true;
                 } catch (Exception ex) {
                     r.exception = ex;
                     LOG.warning(ex.getLocalizedMessage());
@@ -459,6 +421,7 @@ public class DIDService extends BaseService {
                     r.content.setBase64EncodedIV(Base64.getEncoder().encodeToString(iv));
                     r.content.setEncrypted(true);
                     r.content.setEncryptionAlgorithm(EncryptionAlgorithm.AES256);
+                    r.successful = true;
                 } catch (NoSuchAlgorithmException e1) {
                     LOG.warning(e1.getLocalizedMessage());
                 } catch (NoSuchPaddingException e1) {
@@ -514,6 +477,7 @@ public class DIDService extends BaseService {
                     r.content.setEncrypted(false);
                     r.content.setBase64EncodedIV(null);
                     r.content.setEncryptionAlgorithm(null);
+                    r.successful = true;
                 } catch (NoSuchAlgorithmException e1) {
                     LOG.warning(e1.getLocalizedMessage());
                 } catch (NoSuchPaddingException e1) {

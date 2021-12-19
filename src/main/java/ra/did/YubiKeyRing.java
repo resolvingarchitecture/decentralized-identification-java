@@ -57,7 +57,7 @@ public class YubiKeyRing implements KeyRing {
     }
 
     @Override
-    public PGPPublicKeyRingCollection getPublicKeyRingCollection(String location, String username, String passphrase) throws IOException, PGPException {
+    public PGPPublicKeyRingCollection getPublicKeyRingCollection(String location, String username) throws IOException, PGPException {
         return null;
     }
 

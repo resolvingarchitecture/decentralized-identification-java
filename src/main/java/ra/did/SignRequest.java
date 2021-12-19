@@ -1,5 +1,7 @@
 package ra.did;
 
+import ra.common.identity.DID;
+
 public class SignRequest extends DIDRequest {
 
     public static int CONTENT_TO_SIGN_REQUIRED = 2;
@@ -12,6 +14,7 @@ public class SignRequest extends DIDRequest {
     public String location;
     public String keyRingUsername;
     public String keyRingPassphrase;
+    public DID.Type type;
     public byte[] contentToSign;
     public String alias;
     public String passphrase;
