@@ -57,7 +57,7 @@ public class DIDServiceTest {
         req.keyRingUsername = username;
         req.keyRingPassphrase = passphrase;
         req.hashStrength = HASH_STRENGTH_64;
-        req.type = DID.Type.IDENTITY;
+        req.type = DID.Type.NODE;
         Envelope e = Envelope.documentFactory();
         e.addData(GenerateKeyRingCollectionsRequest.class, req);
         e.addRoute(DIDService.class.getName(), DIDService.OPERATION_GENERATE_KEY_RINGS_COLLECTIONS);
@@ -112,7 +112,7 @@ public class DIDServiceTest {
         encReq.keyRingUsername = username;
         encReq.keyRingPassphrase = passphrase;
         encReq.publicKeyAlias = username;
-        encReq.type = DID.Type.IDENTITY;
+        encReq.type = DID.Type.NODE;
         encReq.content = new Text();
         encReq.content.setBody(content.getBytes(), false, false);
         Envelope e = Envelope.documentFactory();
@@ -135,7 +135,7 @@ public class DIDServiceTest {
         decReq.keyRingUsername = username;
         decReq.keyRingPassphrase = passphrase;
         decReq.alias = username;
-        decReq.type = DID.Type.IDENTITY;
+        decReq.type = DID.Type.NODE;
         decReq.content = encReq.content;
         Envelope e2 = Envelope.documentFactory();
         e2.addData(DecryptRequest.class, decReq);
@@ -160,7 +160,7 @@ public class DIDServiceTest {
         signRequest.keyRingPassphrase = passphrase;
         signRequest.alias = username;
         signRequest.passphrase = passphrase;
-        signRequest.type = DID.Type.IDENTITY;
+        signRequest.type = DID.Type.NODE;
         signRequest.contentToSign = content.getBytes(StandardCharsets.UTF_8);
         Envelope e = Envelope.documentFactory();
         e.addData(SignRequest.class, signRequest);
@@ -179,7 +179,7 @@ public class DIDServiceTest {
         verifySignatureRequest.keyRingUsername = username;
         verifySignatureRequest.keyRingPassphrase = passphrase;
         verifySignatureRequest.alias = username;
-        verifySignatureRequest.type = DID.Type.IDENTITY;
+        verifySignatureRequest.type = DID.Type.NODE;
         verifySignatureRequest.contentSigned = content.getBytes(StandardCharsets.UTF_8);
         verifySignatureRequest.signature = signRequest.signature;
         Envelope e2 = Envelope.documentFactory();
