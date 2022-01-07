@@ -519,19 +519,7 @@ public class DIDService extends BaseService {
                 int start = 0;
                 int identitiesNumber = 10; // default
                 DID.Type type = DID.Type.IDENTITY;
-                if(nonNull(e.getValue("identitiesStart"))) {
-                    start = Integer.parseInt((String)e.getValue("identitiesStart"));
-                }
-                if(nonNull(e.getValue("identitiesNumber"))) {
-                    identitiesNumber = Integer.parseInt((String)e.getValue("identitiesNumber"));
-                    if(identitiesNumber > MAX_IDENTITIES) {
-                        identitiesNumber = MAX_IDENTITIES;
-                    }
-                }
-                if(nonNull(e.getValue("identityType"))) {
-                    type = DID.Type.valueOf((String)e.getValue("identityType"));
-                }
-                List<DID> identities = loadRange(start, identitiesNumber, type);
+                List<DID> identities = loadAll(type);
                 e.addNVP("identities", identities);
                 break;
             }
@@ -627,7 +615,7 @@ public class DIDService extends BaseService {
                 if(e.getValue("contactsStart")!=null) {
                     start = Integer.parseInt((String)e.getValue("contactsStart"));
                 }
-                if(DLC.getValue("contactsNumber", e)!=null) {
+                if(e.getValue("contactsNumber")!=null) {
                     contactsNumber = Integer.parseInt((String)e.getValue("contactsNumber"));
                     if(contactsNumber > MAX_CONTACTS_LIST) {
                         contactsNumber = MAX_CONTACTS_LIST; // 1000 is max
@@ -724,6 +712,26 @@ public class DIDService extends BaseService {
             return loadedDID;
         }
         return null;
+    }
+
+    private List<DID> loadAll(DID.Type type) {
+        List<DID> loadedDIDs = new ArrayList<>();
+        List<InfoVault> infoVaults = new ArrayList<>();
+        DID did;
+        InfoVaultDB db;
+        switch (type) {
+            case CONTACT: db = contactsDB;break;
+            case NODE: db = nodesDB;break;
+            default: db = identitiesDB;
+        }
+        if(db.loadRange(0, 1000, infoVaults)) {
+            for (InfoVault iv : infoVaults) {
+                did = new DID();
+                did.fromMap(iv.content.toMap());
+                loadedDIDs.add(did);
+            }
+        }
+        return loadedDIDs;
     }
 
     private List<DID> loadRange(int begin, int numberEntries, DID.Type type) {
