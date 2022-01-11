@@ -4,6 +4,7 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openpgp.PGPException;
 import org.bouncycastle.openpgp.PGPPublicKey;
 import org.bouncycastle.openpgp.PGPPublicKeyRingCollection;
+import org.usb4java.Device;
 import ra.common.*;
 import ra.common.content.JSON;
 import ra.common.crypto.EncryptionAlgorithm;
@@ -21,8 +22,14 @@ import ra.common.service.ServiceStatusObserver;
 import javax.crypto.*;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import javax.usb.*;
+import javax.usb.event.UsbDeviceDataEvent;
+import javax.usb.event.UsbDeviceErrorEvent;
+import javax.usb.event.UsbDeviceEvent;
+import javax.usb.event.UsbDeviceListener;
 import java.io.File;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.util.*;
@@ -74,6 +81,10 @@ public class DIDService extends BaseService {
     private static final int MAX_CONTACTS = 10000;
     private static final int MAX_CONTACTS_LIST = 100;
 
+    // YubiKey
+    // https://support.yubico.com/hc/en-us/articles/360016614920-YubiKey-USB-ID-Values
+    private static final short YUBIKEY_ID = 0x1050; // 4176
+
     private Properties properties = new Properties();
 
     private Map<String, KeyRing> keyRings = new HashMap<>();
@@ -82,6 +93,9 @@ public class DIDService extends BaseService {
     private InfoVaultFileDB identitiesDB; // Personal
     private InfoVaultFileDB nodesDB;
     private InfoVaultFileDB contactsDB;
+
+    // YubiKeys
+    List<UsbDevice> yubiKeys = new ArrayList<>();
 
     public DIDService() {}
 
@@ -527,7 +541,8 @@ public class DIDService extends BaseService {
                 LOG.info("Received get Identity request.");
                 String username = (String)e.getValue("username");
                 DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
-                DID did = load(username, type);
+                Boolean external = (Boolean)e.getValue("external");
+                DID did = load(username, type, external);
                 if(nonNull(did))
                     e.addData(DID.class, did);
                 break;
@@ -536,7 +551,8 @@ public class DIDService extends BaseService {
                 LOG.info("Received verify DID request.");
                 String username = (String)e.getValue("username");
                 DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
-                DID did = load(username, type);
+                Boolean external = (Boolean)e.getValue("external");
+                DID did = load(username, type, external);
                 e.addNVP("verified", isNull(did));
                 break;
             }
@@ -560,7 +576,7 @@ public class DIDService extends BaseService {
                 if(isNull(r.type)) {
                     r.type = DID.Type.IDENTITY;
                 }
-                DID did = load(r.username, r.type);
+                DID did = load(r.username, r.type, r.external);
                 try {
                     if(nonNull(did)
                             && nonNull(did.getPassphraseHash())
@@ -582,12 +598,13 @@ public class DIDService extends BaseService {
                     break;
                 }
                 DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
+                Boolean external = (Boolean)e.getValue("external");
                 String location = null;
                 if(nonNull(e.getValue("identityLocation")))
                     location = (String)e.getValue("identityLocation");
                 DID did = new DID();
                 did.fromMap(m);
-                saveDID(did, type, location);
+                saveDID(did, type, location, external);
                 break;
             }
             case OPERATION_DELETE_IDENTITY: {
@@ -598,13 +615,15 @@ public class DIDService extends BaseService {
             }
             case OPERATION_ADD_CONTACT: {
                 LOG.info("Received add Contact request.");
-                e.addNVP("contact", saveDID((DID)e.getValue("contact"), DID.Type.CONTACT, null));
+                Boolean external = (Boolean)e.getValue("external");
+                e.addNVP("contact", saveDID((DID)e.getValue("contact"), DID.Type.CONTACT, null, external));
                 break;
             }
             case OPERATION_GET_CONTACT: {
                 LOG.info("Received get Contact request.");
                 String username = ((TextMessage) e.getMessage()).getText();
-                DID contact = load(username, DID.Type.CONTACT);
+                Boolean external = (Boolean)e.getValue("external");
+                DID contact = load(username, DID.Type.CONTACT, external);
                 e.addNVP("contact", contact);
                 break;
             }
@@ -613,10 +632,10 @@ public class DIDService extends BaseService {
                 int start = 0;
                 int contactsNumber = 10; // default
                 if(e.getValue("contactsStart")!=null) {
-                    start = Integer.parseInt((String)e.getValue("contactsStart"));
+                    start = (Integer)e.getValue("contactsStart");
                 }
                 if(e.getValue("contactsNumber")!=null) {
-                    contactsNumber = Integer.parseInt((String)e.getValue("contactsNumber"));
+                    contactsNumber = (Integer)e.getValue("contactsNumber");
                     if(contactsNumber > MAX_CONTACTS_LIST) {
                         contactsNumber = MAX_CONTACTS_LIST; // 1000 is max
                     }
@@ -669,7 +688,7 @@ public class DIDService extends BaseService {
      * Saves DID
      * @param did DID
      */
-    private boolean saveDID(DID did, DID.Type type, String location) {
+    private boolean saveDID(DID did, DID.Type type, String location, Boolean external) {
         LOG.info("Saving DID...");
         if(nonNull(did.getPassphrase())) {
             LOG.info("Hashing passphrase...");
@@ -697,19 +716,88 @@ public class DIDService extends BaseService {
         }
     }
 
-    private DID load(String username, DID.Type type) {
-        DID loadedDID = new DID();
-        InfoVault iv = null;
-        switch (type) {
-            case NODE: iv = nodesDB.load(username);break;
-            case CONTACT: iv = contactsDB.load(username);break;
-            case IDENTITY: iv = identitiesDB.load(username);break;
+    private void loadYubiKeys() {
+        try {
+            UsbServices services = UsbHostManager.getUsbServices();
+            findYubiKeys(yubiKeys, services.getRootUsbHub(), 0);
+            if(yubiKeys.isEmpty()) {
+                LOG.info("No YubiKeys found.");
+            }
+            for(UsbDevice yubiKey : yubiKeys) {
+                LOG.info("YubiKey:\n\tVendor Id: "+yubiKey.getUsbDeviceDescriptor().idVendor()+"\n\tProduct Id: "+yubiKey.getUsbDeviceDescriptor().idProduct());
+                yubiKey.addUsbDeviceListener(new UsbDeviceListener() {
+                    @Override
+                    public void usbDeviceDetached(UsbDeviceEvent usbDeviceEvent) {
+                        LOG.info("YubiKey Detached: "+usbDeviceEvent.toString());
+                    }
+
+                    @Override
+                    public void errorEventOccurred(UsbDeviceErrorEvent usbDeviceErrorEvent) {
+                        LOG.warning("YubiKey Error Event: "+usbDeviceErrorEvent.toString());
+                    }
+
+                    @Override
+                    public void dataEventOccurred(UsbDeviceDataEvent usbDeviceDataEvent) {
+                        LOG.info("YubiKey Data Event: "+usbDeviceDataEvent.getData());
+                    }
+                });
+            }
+        } catch (UsbException e) {
+            LOG.warning(e.getLocalizedMessage());
         }
-        if(nonNull(iv)) {
-            loadedDID.fromMap(iv.content.toMap());
-            LOG.info("JSON loaded: " + iv.content.toJSON());
-            LOG.info("DID Loaded from map.");
-            return loadedDID;
+    }
+
+    private void findYubiKeys(List<UsbDevice> yubiKeys, UsbDevice device, int level) {
+            if(device.getUsbDeviceDescriptor().idVendor()==YUBIKEY_ID)
+                yubiKeys.add(device);
+            if(device.isUsbHub()) {
+                final UsbHub hub = (UsbHub) device;
+                for (UsbDevice child: (List<UsbDevice>) hub.getAttachedUsbDevices()) {
+                    findYubiKeys(yubiKeys, child, level + 1);
+                }
+            }
+    }
+
+    public static void dump(UsbDevice device, int level) {
+        for (int i = 0; i < level; i += 1)
+            System.out.print("  ");
+        System.out.println(device);
+        if (device.isUsbHub())
+        {
+            final UsbHub hub = (UsbHub) device;
+            for (UsbDevice child: (List<UsbDevice>) hub.getAttachedUsbDevices())
+            {
+                dump(child, level + 1);
+            }
+        }
+    }
+
+    private DID load(String username, DID.Type type, Boolean external) {
+        DID loadedDID = new DID();
+        if(nonNull(external) && Boolean.TRUE.equals(external)) {
+            if(type == DID.Type.IDENTITY) {
+                try {
+                    UsbServices services = UsbHostManager.getUsbServices();
+                    dump(services.getRootUsbHub(), 0);
+                } catch (UsbException e) {
+                    LOG.warning(e.getLocalizedMessage());
+                }
+            } else {
+                return null;
+            }
+        } else {
+            InfoVault iv = null;
+            switch (type) {
+                case NODE: iv = nodesDB.load(username);break;
+                case CONTACT: iv = contactsDB.load(username);break;
+                case IDENTITY: iv = identitiesDB.load(username);break;
+            }
+            if(nonNull(iv)) {
+                loadedDID.fromMap(iv.content.toMap());
+                LOG.info("JSON loaded: " + iv.content.toJSON());
+                LOG.info("DID Loaded from map.");
+                return loadedDID;
+            }
         }
         return null;
     }
@@ -793,6 +881,7 @@ public class DIDService extends BaseService {
         identitiesDB.setBaseURL(new File(getServiceDirectory(),DID.Type.IDENTITY.name()).getAbsolutePath());
         contactsDB = new InfoVaultFileDB();
         contactsDB.setBaseURL(new File(getServiceDirectory(),DID.Type.CONTACT.name()).getAbsolutePath());
+        loadYubiKeys();
         updateStatus(ServiceStatus.RUNNING);
         LOG.info("Started.");
         return true;
@@ -821,5 +910,4 @@ public class DIDService extends BaseService {
 //        did.setPassphrase("1234");
 //        service.create(did);
 //    }
-
 }
