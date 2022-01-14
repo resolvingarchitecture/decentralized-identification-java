@@ -22,11 +22,13 @@ import ra.common.service.ServiceStatusObserver;
 import javax.crypto.*;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import javax.smartcardio.*;
 import javax.usb.*;
 import javax.usb.event.UsbDeviceDataEvent;
 import javax.usb.event.UsbDeviceErrorEvent;
 import javax.usb.event.UsbDeviceEvent;
 import javax.usb.event.UsbDeviceListener;
+import javax.xml.bind.DatatypeConverter;
 import java.io.File;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
@@ -121,498 +123,23 @@ public class DIDService extends BaseService {
     private void handleAll(Envelope e) {
         Route route = e.getRoute();
         String operation = route.getOperation();
-        KeyRing keyRing;
         switch(operation) {
-            case OPERATION_GENERATE_KEY_RINGS_COLLECTIONS: {
-                LOG.info("Generate Key Rings Collections request received.");
-                GenerateKeyRingCollectionsRequest r = (GenerateKeyRingCollectionsRequest) e.getData(GenerateKeyRingCollectionsRequest.class);
-                if(r == null) {
-                    LOG.warning("GenerateKeyRingCollectionsRequest required.");
-                    r = new GenerateKeyRingCollectionsRequest();
-                    r.statusCode = GenerateKeyRingCollectionsRequest.REQUEST_REQUIRED;
-                    e.addData(GenerateKeyRingCollectionsRequest.class, r);
-                    break;
-                }
-                if(isNull(r.type)) {
-                    LOG.warning("KeyRing DID Type required.");
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
-                    break;
-                }
-                File f;
-                if(r.location == null || r.location.isEmpty()) {
-                    // default
-                    f = new File(getServiceDirectory(), r.type.name());
-                    r.location = f.getAbsolutePath();
-                } else {
-                    f = new File(r.location, r.type.name());
-                }
-                if(!f.exists() && !f.mkdir()) {
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_LOCATION_INACCESSIBLE;
-                    break;
-                }
-                if(r.keyRingUsername == null) {
-                    LOG.warning("KeyRing username required.");
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_USERNAME_REQUIRED;
-                    break;
-                }
-                if(r.keyRingPassphrase == null) {
-                    LOG.warning("KeyRing passphrase required.");
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_PASSPHRASE_REQUIRED;
-                    break;
-                }
-                if(r.hashStrength < HASH_STRENGTH_64) {
-                    r.hashStrength = HASH_STRENGTH_64; // minimum
-                }
-                if(r.keyRingImplementation == null) {
-                    r.keyRingImplementation = OpenPGPKeyRing.class.getName(); // Default
-                }
-                try {
-                    keyRing = keyRings.get(r.keyRingImplementation);
-                    if(keyRing == null) {
-                        LOG.warning("KeyRing implementation unknown: "+r.keyRingImplementation);
-                        r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
-                        return;
-                    }
-                    keyRing.generateKeyRingCollections(r);
-                    r.successful = true;
-                } catch (Exception ex) {
-                    r.exception = ex;
-                }
-                break;
-            }
-//            case OPERATION_GENERATE_KEY_RINGS: {
-//                GenerateKeyRingRequest r = (GenerateKeyRingRequest)e.getData(GenerateKeyRingRequest.class);
-//                if(r == null) {
-//                    r = new GenerateKeyRingRequest();
-//                    r.statusCode = GenerateKeyRingRequest.REQUEST_REQUIRED;
-//                    break;
-//                }
-//                if(isNull(r.type)) {
-//                    LOG.warning("KeyRing DID Type required.");
-//                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
-//                    break;
-//                }
-//                File f;
-//                if(r.location == null || r.location.isEmpty()) {
-//                    // default
-//                    f = new File(getServiceDirectory(), r.type.name());
-//                    r.location = f.getAbsolutePath();
-//                } else {
-//                    f = new File(r.location, r.type.name());
-//                }
-//                if(!f.exists() && !f.mkdir()) {
-//                    r.statusCode = GenerateKeyRingRequest.KEYRING_LOCATION_INACCESSIBLE;
-//                    break;
-//                }
-//                if(r.keyRingUsername == null || r.keyRingUsername.isEmpty()) {
-//                    r.statusCode = GenerateKeyRingRequest.KEYRING_USERNAME_REQUIRED;
-//                    break;
-//                }
-//                if(r.keyRingPassphrase == null || r.keyRingPassphrase.isEmpty()) {
-//                    r.statusCode = GenerateKeyRingRequest.KEYRING_PASSPHRASE_REQUIRED;
-//                    break;
-//                }
-//                if(r.alias == null || r.alias.isEmpty()) {
-//                    r.statusCode = GenerateKeyRingRequest.ALIAS_REQUIRED;
-//                    break;
-//                }
-//                if(r.aliasPassphrase == null || r.aliasPassphrase.isEmpty()) {
-//                    r.statusCode = GenerateKeyRingRequest.ALIAS_PASSPHRASE_REQUIRED;
-//                    break;
-//                }
-//                if(r.keyRingImplementation == null)
-//                    r.keyRingImplementation = OpenPGPKeyRing.class.getName(); // default
-//                keyRing = keyRings.get(r.keyRingImplementation);
-//                if(keyRing == null) {
-//                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
-//                    return;
-//                }
-//                try {
-//                    keyRing.createKeyRings(r.location, r.keyRingUsername, r.keyRingPassphrase, r.alias, r.aliasPassphrase, r.hashStrength, r.keyRingImplementation);
-//                    r.successful = true;
-//                } catch (Exception ex) {
-//                    r.exception = ex;
-//                    LOG.warning(ex.getLocalizedMessage());
-//                }
-//                break;
-//            }
-            case OPERATION_ENCRYPT: {
-                EncryptRequest r = (EncryptRequest)e.getData(EncryptRequest.class);
-                if(r == null) {
-                    r = new EncryptRequest();
-                    r.statusCode = EncryptRequest.REQUEST_REQUIRED;
-                    e.addData(EncryptRequest.class, r);
-                    break;
-                }
-                if(isNull(r.type)) {
-                    LOG.warning("KeyRing DID Type required.");
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
-                    break;
-                }
-                File f;
-                if(r.location == null || r.location.isEmpty()) {
-                    // default
-                    f = new File(getServiceDirectory(), r.type.name());
-                    r.location = f.getAbsolutePath();
-                } else {
-                    f = new File(r.location, r.type.name());
-                }
-                if(!f.exists() && !f.mkdir()) {
-                    r.statusCode = EncryptRequest.LOCATION_INACCESSIBLE;
-                    break;
-                }
-                if(r.content == null || r.content.getBody() == null || r.content.getBody().length == 0) {
-                    r.statusCode = EncryptRequest.CONTENT_TO_ENCRYPT_REQUIRED;
-                    break;
-                }
-                if(r.publicKeyAlias == null) {
-                    r.statusCode = EncryptRequest.PUBLIC_KEY_ALIAS_REQUIRED;
-                    break;
-                }
-                keyRing = keyRings.get(r.keyRingImplementation);
-                if(keyRing == null) {
-                    r.statusCode = EncryptRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
-                    return;
-                }
-                try {
-                    keyRing.encrypt(r);
-                    r.successful = true;
-                } catch (Exception ex) {
-                    r.exception = ex;
-                    LOG.warning(ex.getLocalizedMessage());
-                }
-                break;
-            }
-            case OPERATION_DECRYPT: {
-                DecryptRequest r = (DecryptRequest)e.getData(DecryptRequest.class);
-                if(r == null) {
-                    r = new DecryptRequest();
-                    r.statusCode = DecryptRequest.REQUEST_REQUIRED;
-                    e.addData(DecryptRequest.class, r);
-                    break;
-                }
-                if(isNull(r.type)) {
-                    LOG.warning("KeyRing DID Type required.");
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
-                    break;
-                }
-                File f;
-                if(r.location == null || r.location.isEmpty()) {
-                    // default
-                    f = new File(getServiceDirectory(), r.type.name());
-                    r.location = f.getAbsolutePath();
-                } else {
-                    f = new File(r.location, r.type.name());
-                }
-                if(!f.exists() && !f.mkdir()) {
-                    r.statusCode = DecryptRequest.LOCATION_INACCESSIBLE;
-                    break;
-                }
-                keyRing = keyRings.get(r.keyRingImplementation);
-                if(keyRing == null) {
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
-                    return;
-                }
-                try {
-                    keyRing.decrypt(r);
-                    r.successful = true;
-                } catch (Exception ex) {
-                    r.exception = ex;
-                    LOG.warning(ex.getLocalizedMessage());
-                }
-                break;
-            }
-            case OPERATION_SIGN: {
-                SignRequest r = (SignRequest)e.getData(SignRequest.class);
-                if(r == null) {
-                    r = new SignRequest();
-                    r.statusCode = SignRequest.REQUEST_REQUIRED;
-                    e.addData(SignRequest.class, r);
-                    break;
-                }
-                if(isNull(r.type)) {
-                    LOG.warning("KeyRing DID Type required.");
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
-                    break;
-                }
-                File f;
-                if(r.location == null || r.location.isEmpty()) {
-                    // default
-                    f = new File(getServiceDirectory(), r.type.name());
-                    r.location = f.getAbsolutePath();
-                } else {
-                    f = new File(r.location, r.type.name());
-                }
-                if(!f.exists() && !f.mkdir()) {
-                    r.statusCode = SignRequest.LOCATION_INACCESSIBLE;
-                    break;
-                }
-                keyRing = keyRings.get(r.keyRingImplementation);
-                if(keyRing == null) {
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
-                    return;
-                }
-                try {
-                    keyRing.sign(r);
-                    r.successful = true;
-                } catch (Exception ex) {
-                    r.exception = ex;
-                    LOG.warning(ex.getLocalizedMessage());
-                }
-                break;
-            }
-            case OPERATION_VERIFY_SIGNATURE: {
-                VerifySignatureRequest r = (VerifySignatureRequest)e.getData(VerifySignatureRequest.class);
-                if(r == null) {
-                    r = new VerifySignatureRequest();
-                    r.statusCode = VerifySignatureRequest.REQUEST_REQUIRED;
-                    e.addData(VerifySignatureRequest.class, r);
-                    break;
-                }
-                if(isNull(r.type)) {
-                    LOG.warning("KeyRing DID Type required.");
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
-                    break;
-                }
-                File f;
-                if(r.location == null || r.location.isEmpty()) {
-                    // default
-                    f = new File(getServiceDirectory(), r.type.name());
-                    r.location = f.getAbsolutePath();
-                } else {
-                    f = new File(r.location, r.type.name());
-                }
-                if(!f.exists() && !f.mkdir()) {
-                    r.statusCode = VerifySignatureRequest.LOCATION_INACCESSIBLE;
-                    break;
-                }
-                keyRing = keyRings.get(r.keyRingImplementation);
-                if(keyRing == null) {
-                    r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
-                    return;
-                }
-                try {
-                    keyRing.verifySignature(r);
-                    r.successful = true;
-                } catch (Exception ex) {
-                    r.exception = ex;
-                    LOG.warning(ex.getLocalizedMessage());
-                }
-                break;
-            }
-            case OPERATION_ENCRYPT_SYMMETRIC: {
-                EncryptSymmetricRequest r = (EncryptSymmetricRequest)e.getData(EncryptSymmetricRequest.class);
-                if(r==null) {
-                    r = new EncryptSymmetricRequest();
-                    r.statusCode = EncryptSymmetricRequest.REQUEST_REQUIRED;
-                    e.addData(EncryptSymmetricRequest.class, r);
-                    break;
-                }
-                if(r.content == null || r.content.getBody() == null || r.content.getBody().length == 0) {
-                    r.statusCode = EncryptSymmetricRequest.CONTENT_TO_ENCRYPT_REQUIRED;
-                    break;
-                }
-                if(r.content.getEncryptionPassphrase() == null || r.content.getEncryptionPassphrase().isEmpty()) {
-                    r.statusCode = EncryptSymmetricRequest.PASSPHRASE_REQUIRED;
-                    break;
-                }
-                try {
-                    byte[] key = r.content.getEncryptionPassphrase().getBytes(StandardCharsets.UTF_8);
-                    MessageDigest sha = MessageDigest.getInstance("SHA-1");
-                    key = sha.digest(key);
-                    key = Arrays.copyOf(key,16);
-                    // Encrypt
-                    SecretKey secretKey = new SecretKeySpec(key, "AES");
-                    Cipher aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-                    byte[] iv = new byte[16];
-                    SecureRandom random = new SecureRandom();
-                    random.nextBytes(iv);
-                    IvParameterSpec ivParameterSpec = new IvParameterSpec(iv);
-                    aesCipher.init(Cipher.ENCRYPT_MODE, secretKey, ivParameterSpec);
-                    r.content.setBody(aesCipher.doFinal(r.content.getBody()), false, false);
-                    r.content.setBody(Base64.getEncoder().encodeToString(r.content.getBody()).getBytes(), false, false);
-                    r.content.setBodyBase64Encoded(true);
-                    r.content.setBase64EncodedIV(Base64.getEncoder().encodeToString(iv));
-                    r.content.setEncrypted(true);
-                    r.content.setEncryptionAlgorithm(EncryptionAlgorithm.AES256);
-                    r.successful = true;
-                } catch (NoSuchAlgorithmException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                } catch (NoSuchPaddingException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                } catch (InvalidKeyException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                } catch (InvalidAlgorithmParameterException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                } catch (IllegalBlockSizeException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                } catch (BadPaddingException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                }
-
-                break;
-            }
-            case OPERATION_DECRYPT_SYMMETRIC: {
-                DecryptSymmetricRequest r = (DecryptSymmetricRequest)e.getData(DecryptSymmetricRequest.class);
-                if(r==null) {
-                    r = new DecryptSymmetricRequest();
-                    e.addData(DecryptSymmetricRequest.class, r);
-                    r.statusCode = DecryptSymmetricRequest.REQUEST_REQUIRED;
-                    break;
-                }
-                if(r.content == null || r.content.getBody() == null || r.content.getBody().length == 0) {
-                    r.statusCode = DecryptSymmetricRequest.ENCRYPTED_CONTENT_REQUIRED;
-                    break;
-                }
-                if(r.content.getEncryptionPassphrase()==null || r.content.getEncryptionPassphrase().isEmpty()) {
-                    r.statusCode = DecryptSymmetricRequest.PASSPHRASE_REQUIRED;
-                    break;
-                }
-                if(r.content.getBase64EncodedIV()==null || r.content.getBase64EncodedIV().isEmpty()) {
-                    r.statusCode = DecryptSymmetricRequest.IV_REQUIRED;
-                    break;
-                }
-                try {
-                    byte[] key = r.content.getEncryptionPassphrase().getBytes(StandardCharsets.UTF_8);
-                    MessageDigest sha = MessageDigest.getInstance("SHA-1");
-                    key = sha.digest(key);
-                    key = Arrays.copyOf(key,16);
-                    // Encrypt
-                    SecretKey secretKey = new SecretKeySpec(key, "AES");
-                    Cipher aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-                    if(r.content.getBodyBase64Encoded()) {
-                        r.content.setBody(Base64.getDecoder().decode(r.content.getBody()), false, false);
-                        r.content.setBodyBase64Encoded(false);
-                    }
-                    byte[] iv = Base64.getDecoder().decode(r.content.getBase64EncodedIV());
-                    IvParameterSpec ivParameterSpec = new IvParameterSpec(iv);
-                    aesCipher.init(Cipher.DECRYPT_MODE, secretKey, ivParameterSpec);
-                    r.content.setBody(aesCipher.doFinal(r.content.getBody()), false, false);
-                    r.content.setEncrypted(false);
-                    r.content.setBase64EncodedIV(null);
-                    r.content.setEncryptionAlgorithm(null);
-                    r.successful = true;
-                } catch (NoSuchAlgorithmException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                } catch (NoSuchPaddingException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                } catch (InvalidKeyException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                } catch (InvalidAlgorithmParameterException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                } catch (IllegalBlockSizeException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                } catch (BadPaddingException e1) {
-                    r.statusCode = DecryptSymmetricRequest.BAD_PASSPHRASE;
-                    LOG.warning(e1.getLocalizedMessage());
-                }
-                break;
-            }
-            case OPERATION_VOUCH: {
-                VouchRequest r = (VouchRequest)e.getData(VouchRequest.class);
-                if(r.signer==null) {
-                    r.statusCode = VouchRequest.SIGNER_REQUIRED;
-                    break;
-                }
-                if(r.signee==null){
-                    r.statusCode = VouchRequest.SIGNEE_REQUIRED;
-                    break;
-                }
-                if(r.attributesToSign==null) {
-                    r.statusCode = VouchRequest.ATTRIBUTES_REQUIRED;
-                    break;
-                }
-                // TODO: Verify attributes to sign are available attributes
-                LOG.warning("VOUCH not yet implemented.");
-            }
-            case OPERATION_RELOAD: {
-                loadKeyRingImplementations();
-            }
-            case OPERATION_GET_IDENTITIES: {
-                LOG.info("Received get Identities request.");
-                int start = 0;
-                int identitiesNumber = 10; // default
-                DID.Type type = DID.Type.IDENTITY;
-                List<DID> identities = loadAll(type);
-                e.addNVP("identities", identities);
-                break;
-            }
-            case OPERATION_GET_IDENTITY: {
-                LOG.info("Received get Identity request.");
-                String username = (String)e.getValue("username");
-                DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
-                Boolean external = (Boolean)e.getValue("external");
-                DID did = load(username, type, external);
-                if(nonNull(did))
-                    e.addData(DID.class, did);
-                break;
-            }
-            case OPERATION_VERIFY_IDENTITY: {
-                LOG.info("Received verify DID request.");
-                String username = (String)e.getValue("username");
-                DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
-                Boolean external = (Boolean)e.getValue("external");
-                DID did = load(username, type, external);
-                e.addNVP("verified", isNull(did));
-                break;
-            }
-            case OPERATION_AUTHENTICATE: {
-                LOG.info("Received authn request.");
-                AuthenticateDIDRequest r = (AuthenticateDIDRequest)e.getData(AuthenticateDIDRequest.class);
-                if(isNull(r)) {
-                    r = new AuthenticateDIDRequest();
-                    r.statusCode = AuthenticateDIDRequest.REQUEST_REQUIRED;
-                    e.addNVP("authN",r);
-                    break;
-                }
-                if(isNull(r.username)) {
-                    r.statusCode = AuthenticateDIDRequest.USERNAME_REQUIRED;
-                    break;
-                }
-                if(isNull(r.passphrase)) {
-                    r.statusCode = AuthenticateDIDRequest.PASSPHRASE_REQUIRED;
-                    break;
-                }
-                if(isNull(r.type)) {
-                    r.type = DID.Type.IDENTITY;
-                }
-                DID did = load(r.username, r.type, r.external);
-                try {
-                    if(nonNull(did)
-                            && nonNull(did.getPassphraseHash())
-                            && HashUtil.verifyPasswordHash(r.passphrase, did.getPassphraseHash().getHash())) {
-                        e.addData(DID.class, did);
-                    } else {
-                        e.addNVP("authN", false);
-                    }
-                } catch (NoSuchAlgorithmException e1) {
-                    LOG.warning(e1.getLocalizedMessage());
-                }
-                break;
-            }
-            case OPERATION_SAVE_IDENTITY: {
-                LOG.info("Received save DID request.");
-                Map<String,Object> m = (Map<String,Object>)e.getData(DID.class);
-                if(isNull(m)) {
-                    e.addErrorMessage("No DID to Save.");
-                    break;
-                }
-                DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
-                Boolean external = (Boolean)e.getValue("external");
-                String location = null;
-                if(nonNull(e.getValue("identityLocation")))
-                    location = (String)e.getValue("identityLocation");
-                DID did = new DID();
-                did.fromMap(m);
-                saveDID(did, type, location, external);
-                break;
-            }
-            case OPERATION_DELETE_IDENTITY: {
-                String username = (String)e.getValue("username");
-                Boolean success = identitiesDB.delete(username);
-                e.addNVP("delete-success",success.toString());
-                break;
-            }
+            case OPERATION_GENERATE_KEY_RINGS_COLLECTIONS: {generateKeyRingsCollection(e);break;}
+//            case OPERATION_GENERATE_KEY_RINGS: {generateKeyRings(e);break;}
+            case OPERATION_ENCRYPT: {encrypt(e);break;}
+            case OPERATION_DECRYPT: {decrypt(e);break;}
+            case OPERATION_SIGN: {sign(e);break;}
+            case OPERATION_VERIFY_SIGNATURE: {verifySignature(e);break;}
+            case OPERATION_ENCRYPT_SYMMETRIC: {encryptSymmetric(e);break;}
+            case OPERATION_DECRYPT_SYMMETRIC: {decryptSymmetric(e);break;}
+            case OPERATION_VOUCH: {vouch(e);break;}
+            case OPERATION_RELOAD: {loadKeyRingImplementations();break;}
+            case OPERATION_GET_IDENTITIES: {getIdentities(e);break;}
+            case OPERATION_GET_IDENTITY: {getIdentity(e);break;}
+            case OPERATION_VERIFY_IDENTITY: {verifyIdentity(e);break;}
+            case OPERATION_AUTHENTICATE: {authenticate(e);break;}
+            case OPERATION_SAVE_IDENTITY: {saveIdentity(e);break;}
+            case OPERATION_DELETE_IDENTITY: {deleteIdentity(e);break;}
             case OPERATION_ADD_CONTACT: {
                 LOG.info("Received add Contact request.");
                 Boolean external = (Boolean)e.getValue("external");
@@ -684,6 +211,503 @@ public class DIDService extends BaseService {
         }
     }
 
+    private void generateKeyRingsCollection(Envelope e) {
+        LOG.info("Generate Key Rings Collections request received.");
+        GenerateKeyRingCollectionsRequest r = (GenerateKeyRingCollectionsRequest) e.getData(GenerateKeyRingCollectionsRequest.class);
+        if(r == null) {
+            LOG.warning("GenerateKeyRingCollectionsRequest required.");
+            r = new GenerateKeyRingCollectionsRequest();
+            r.statusCode = GenerateKeyRingCollectionsRequest.REQUEST_REQUIRED;
+            e.addData(GenerateKeyRingCollectionsRequest.class, r);
+            return;
+        }
+        if(isNull(r.type)) {
+            LOG.warning("KeyRing DID Type required.");
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
+            return;
+        }
+        File f;
+        if(r.location == null || r.location.isEmpty()) {
+            // default
+            f = new File(getServiceDirectory(), r.type.name());
+            r.location = f.getAbsolutePath();
+        } else {
+            f = new File(r.location, r.type.name());
+        }
+        if(!f.exists() && !f.mkdir()) {
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_LOCATION_INACCESSIBLE;
+            return;
+        }
+        if(r.keyRingUsername == null) {
+            LOG.warning("KeyRing username required.");
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_USERNAME_REQUIRED;
+            return;
+        }
+        if(r.keyRingPassphrase == null) {
+            LOG.warning("KeyRing passphrase required.");
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_PASSPHRASE_REQUIRED;
+            return;
+        }
+        if(r.hashStrength < HASH_STRENGTH_64) {
+            r.hashStrength = HASH_STRENGTH_64; // minimum
+        }
+        if(r.keyRingImplementation == null) {
+            r.keyRingImplementation = OpenPGPKeyRing.class.getName(); // Default
+        }
+        try {
+            KeyRing keyRing = keyRings.get(r.keyRingImplementation);
+            if(keyRing == null) {
+                LOG.warning("KeyRing implementation unknown: "+r.keyRingImplementation);
+                r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+                return;
+            }
+            keyRing.generateKeyRingCollections(r);
+            r.successful = true;
+        } catch (Exception ex) {
+            r.exception = ex;
+        }
+    }
+
+//    private void generateKeyRings(Envelope e) {
+//        GenerateKeyRingRequest r = (GenerateKeyRingRequest)e.getData(GenerateKeyRingRequest.class);
+//        if(r == null) {
+//            r = new GenerateKeyRingRequest();
+//            r.statusCode = GenerateKeyRingRequest.REQUEST_REQUIRED;
+//            return;
+//        }
+//        if(isNull(r.type)) {
+//            LOG.warning("KeyRing DID Type required.");
+//            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
+//            return;
+//        }
+//        File f;
+//        if(r.location == null || r.location.isEmpty()) {
+//            // default
+//            f = new File(getServiceDirectory(), r.type.name());
+//            r.location = f.getAbsolutePath();
+//        } else {
+//            f = new File(r.location, r.type.name());
+//        }
+//        if(!f.exists() && !f.mkdir()) {
+//            r.statusCode = GenerateKeyRingRequest.KEYRING_LOCATION_INACCESSIBLE;
+//            return;
+//        }
+//        if(r.keyRingUsername == null || r.keyRingUsername.isEmpty()) {
+//            r.statusCode = GenerateKeyRingRequest.KEYRING_USERNAME_REQUIRED;
+//            return;
+//        }
+//        if(r.keyRingPassphrase == null || r.keyRingPassphrase.isEmpty()) {
+//            r.statusCode = GenerateKeyRingRequest.KEYRING_PASSPHRASE_REQUIRED;
+//            return;
+//        }
+//        if(r.alias == null || r.alias.isEmpty()) {
+//            r.statusCode = GenerateKeyRingRequest.ALIAS_REQUIRED;
+//            return;
+//        }
+//        if(r.aliasPassphrase == null || r.aliasPassphrase.isEmpty()) {
+//            r.statusCode = GenerateKeyRingRequest.ALIAS_PASSPHRASE_REQUIRED;
+//            return;
+//        }
+//        if(r.keyRingImplementation == null)
+//            r.keyRingImplementation = OpenPGPKeyRing.class.getName(); // default
+//        KeyRing keyRing = keyRings.get(r.keyRingImplementation);
+//        if(keyRing == null) {
+//            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+//            return;
+//        }
+//        try {
+//            keyRing.createKeyRings(r.location, r.keyRingUsername, r.keyRingPassphrase, r.alias, r.aliasPassphrase, r.hashStrength, r.keyRingImplementation);
+//            r.successful = true;
+//        } catch (Exception ex) {
+//            r.exception = ex;
+//            LOG.warning(ex.getLocalizedMessage());
+//        }
+//    }
+
+    private void encrypt(Envelope e) {
+        EncryptRequest r = (EncryptRequest)e.getData(EncryptRequest.class);
+        if(r == null) {
+            r = new EncryptRequest();
+            r.statusCode = EncryptRequest.REQUEST_REQUIRED;
+            e.addData(EncryptRequest.class, r);
+            return;
+        }
+        if(isNull(r.type)) {
+            LOG.warning("KeyRing DID Type required.");
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
+            return;
+        }
+        File f;
+        if(r.location == null || r.location.isEmpty()) {
+            // default
+            f = new File(getServiceDirectory(), r.type.name());
+            r.location = f.getAbsolutePath();
+        } else {
+            f = new File(r.location, r.type.name());
+        }
+        if(!f.exists() && !f.mkdir()) {
+            r.statusCode = EncryptRequest.LOCATION_INACCESSIBLE;
+            return;
+        }
+        if(r.content == null || r.content.getBody() == null || r.content.getBody().length == 0) {
+            r.statusCode = EncryptRequest.CONTENT_TO_ENCRYPT_REQUIRED;
+            return;
+        }
+        if(r.publicKeyAlias == null) {
+            r.statusCode = EncryptRequest.PUBLIC_KEY_ALIAS_REQUIRED;
+            return;
+        }
+        KeyRing keyRing = keyRings.get(r.keyRingImplementation);
+        if(keyRing == null) {
+            r.statusCode = EncryptRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+            return;
+        }
+        try {
+            keyRing.encrypt(r);
+            r.successful = true;
+        } catch (Exception ex) {
+            r.exception = ex;
+            LOG.warning(ex.getLocalizedMessage());
+        }
+    }
+
+    private void decrypt(Envelope e) {
+        DecryptRequest r = (DecryptRequest)e.getData(DecryptRequest.class);
+        if(r == null) {
+            r = new DecryptRequest();
+            r.statusCode = DecryptRequest.REQUEST_REQUIRED;
+            e.addData(DecryptRequest.class, r);
+            return;
+        }
+        if(isNull(r.type)) {
+            LOG.warning("KeyRing DID Type required.");
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
+            return;
+        }
+        File f;
+        if(r.location == null || r.location.isEmpty()) {
+            // default
+            f = new File(getServiceDirectory(), r.type.name());
+            r.location = f.getAbsolutePath();
+        } else {
+            f = new File(r.location, r.type.name());
+        }
+        if(!f.exists() && !f.mkdir()) {
+            r.statusCode = DecryptRequest.LOCATION_INACCESSIBLE;
+            return;
+        }
+        KeyRing keyRing = keyRings.get(r.keyRingImplementation);
+        if(keyRing == null) {
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+            return;
+        }
+        try {
+            keyRing.decrypt(r);
+            r.successful = true;
+        } catch (Exception ex) {
+            r.exception = ex;
+            LOG.warning(ex.getLocalizedMessage());
+        }
+    }
+
+    private void sign(Envelope e) {
+        SignRequest r = (SignRequest)e.getData(SignRequest.class);
+        if(r == null) {
+            r = new SignRequest();
+            r.statusCode = SignRequest.REQUEST_REQUIRED;
+            e.addData(SignRequest.class, r);
+            return;
+        }
+        if(isNull(r.type)) {
+            LOG.warning("KeyRing DID Type required.");
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
+            return;
+        }
+        File f;
+        if(r.location == null || r.location.isEmpty()) {
+            // default
+            f = new File(getServiceDirectory(), r.type.name());
+            r.location = f.getAbsolutePath();
+        } else {
+            f = new File(r.location, r.type.name());
+        }
+        if(!f.exists() && !f.mkdir()) {
+            r.statusCode = SignRequest.LOCATION_INACCESSIBLE;
+            return;
+        }
+        KeyRing keyRing = keyRings.get(r.keyRingImplementation);
+        if(keyRing == null) {
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+            return;
+        }
+        try {
+            keyRing.sign(r);
+            r.successful = true;
+        } catch (Exception ex) {
+            r.exception = ex;
+            LOG.warning(ex.getLocalizedMessage());
+        }
+    }
+
+    private void verifySignature(Envelope e) {
+        VerifySignatureRequest r = (VerifySignatureRequest)e.getData(VerifySignatureRequest.class);
+        if(r == null) {
+            r = new VerifySignatureRequest();
+            r.statusCode = VerifySignatureRequest.REQUEST_REQUIRED;
+            e.addData(VerifySignatureRequest.class, r);
+            return;
+        }
+        if(isNull(r.type)) {
+            LOG.warning("KeyRing DID Type required.");
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
+            return;
+        }
+        File f;
+        if(r.location == null || r.location.isEmpty()) {
+            // default
+            f = new File(getServiceDirectory(), r.type.name());
+            r.location = f.getAbsolutePath();
+        } else {
+            f = new File(r.location, r.type.name());
+        }
+        if(!f.exists() && !f.mkdir()) {
+            r.statusCode = VerifySignatureRequest.LOCATION_INACCESSIBLE;
+            return;
+        }
+        KeyRing keyRing = keyRings.get(r.keyRingImplementation);
+        if(keyRing == null) {
+            r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_IMPLEMENTATION_UNKNOWN;
+            return;
+        }
+        try {
+            keyRing.verifySignature(r);
+            r.successful = true;
+        } catch (Exception ex) {
+            r.exception = ex;
+            LOG.warning(ex.getLocalizedMessage());
+        }
+    }
+
+    private void encryptSymmetric(Envelope e) {
+        EncryptSymmetricRequest r = (EncryptSymmetricRequest)e.getData(EncryptSymmetricRequest.class);
+        if(r==null) {
+            r = new EncryptSymmetricRequest();
+            r.statusCode = EncryptSymmetricRequest.REQUEST_REQUIRED;
+            e.addData(EncryptSymmetricRequest.class, r);
+            return;
+        }
+        if(r.content == null || r.content.getBody() == null || r.content.getBody().length == 0) {
+            r.statusCode = EncryptSymmetricRequest.CONTENT_TO_ENCRYPT_REQUIRED;
+            return;
+        }
+        if(r.content.getEncryptionPassphrase() == null || r.content.getEncryptionPassphrase().isEmpty()) {
+            r.statusCode = EncryptSymmetricRequest.PASSPHRASE_REQUIRED;
+            return;
+        }
+        try {
+            byte[] key = r.content.getEncryptionPassphrase().getBytes(StandardCharsets.UTF_8);
+            MessageDigest sha = MessageDigest.getInstance("SHA-1");
+            key = sha.digest(key);
+            key = Arrays.copyOf(key,16);
+            // Encrypt
+            SecretKey secretKey = new SecretKeySpec(key, "AES");
+            Cipher aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            byte[] iv = new byte[16];
+            SecureRandom random = new SecureRandom();
+            random.nextBytes(iv);
+            IvParameterSpec ivParameterSpec = new IvParameterSpec(iv);
+            aesCipher.init(Cipher.ENCRYPT_MODE, secretKey, ivParameterSpec);
+            r.content.setBody(aesCipher.doFinal(r.content.getBody()), false, false);
+            r.content.setBody(Base64.getEncoder().encodeToString(r.content.getBody()).getBytes(), false, false);
+            r.content.setBodyBase64Encoded(true);
+            r.content.setBase64EncodedIV(Base64.getEncoder().encodeToString(iv));
+            r.content.setEncrypted(true);
+            r.content.setEncryptionAlgorithm(EncryptionAlgorithm.AES256);
+            r.successful = true;
+        } catch (NoSuchAlgorithmException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        } catch (NoSuchPaddingException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        } catch (InvalidKeyException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        } catch (InvalidAlgorithmParameterException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        } catch (IllegalBlockSizeException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        } catch (BadPaddingException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        }
+    }
+
+    private void decryptSymmetric(Envelope e) {
+        DecryptSymmetricRequest r = (DecryptSymmetricRequest)e.getData(DecryptSymmetricRequest.class);
+        if(r==null) {
+            r = new DecryptSymmetricRequest();
+            e.addData(DecryptSymmetricRequest.class, r);
+            r.statusCode = DecryptSymmetricRequest.REQUEST_REQUIRED;
+            return;
+        }
+        if(r.content == null || r.content.getBody() == null || r.content.getBody().length == 0) {
+            r.statusCode = DecryptSymmetricRequest.ENCRYPTED_CONTENT_REQUIRED;
+            return;
+        }
+        if(r.content.getEncryptionPassphrase()==null || r.content.getEncryptionPassphrase().isEmpty()) {
+            r.statusCode = DecryptSymmetricRequest.PASSPHRASE_REQUIRED;
+            return;
+        }
+        if(r.content.getBase64EncodedIV()==null || r.content.getBase64EncodedIV().isEmpty()) {
+            r.statusCode = DecryptSymmetricRequest.IV_REQUIRED;
+            return;
+        }
+        try {
+            byte[] key = r.content.getEncryptionPassphrase().getBytes(StandardCharsets.UTF_8);
+            MessageDigest sha = MessageDigest.getInstance("SHA-1");
+            key = sha.digest(key);
+            key = Arrays.copyOf(key,16);
+            // Encrypt
+            SecretKey secretKey = new SecretKeySpec(key, "AES");
+            Cipher aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            if(r.content.getBodyBase64Encoded()) {
+                r.content.setBody(Base64.getDecoder().decode(r.content.getBody()), false, false);
+                r.content.setBodyBase64Encoded(false);
+            }
+            byte[] iv = Base64.getDecoder().decode(r.content.getBase64EncodedIV());
+            IvParameterSpec ivParameterSpec = new IvParameterSpec(iv);
+            aesCipher.init(Cipher.DECRYPT_MODE, secretKey, ivParameterSpec);
+            r.content.setBody(aesCipher.doFinal(r.content.getBody()), false, false);
+            r.content.setEncrypted(false);
+            r.content.setBase64EncodedIV(null);
+            r.content.setEncryptionAlgorithm(null);
+            r.successful = true;
+        } catch (NoSuchAlgorithmException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        } catch (NoSuchPaddingException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        } catch (InvalidKeyException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        } catch (InvalidAlgorithmParameterException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        } catch (IllegalBlockSizeException e1) {
+            e.addErrorMessage(e1.getLocalizedMessage());
+            LOG.warning(e1.getLocalizedMessage());
+        } catch (BadPaddingException e1) {
+            r.statusCode = DecryptSymmetricRequest.BAD_PASSPHRASE;
+        }
+    }
+
+    private void vouch(Envelope e) {
+        VouchRequest r = (VouchRequest)e.getData(VouchRequest.class);
+        if(r.signer==null) {
+            r.statusCode = VouchRequest.SIGNER_REQUIRED;
+            return;
+        }
+        if(r.signee==null){
+            r.statusCode = VouchRequest.SIGNEE_REQUIRED;
+            return;
+        }
+        if(r.attributesToSign==null) {
+            r.statusCode = VouchRequest.ATTRIBUTES_REQUIRED;
+            return;
+        }
+        // TODO: Verify attributes to sign are available attributes
+        LOG.warning("VOUCH not yet implemented.");
+    }
+
+    private void getIdentities(Envelope e) {
+        LOG.info("Received get Identities request.");
+        int start = 0;
+        int identitiesNumber = 10; // default
+        DID.Type type = DID.Type.IDENTITY;
+        List<DID> identities = loadAll(type);
+        e.addNVP("identities", identities);
+    }
+
+    private void getIdentity(Envelope e) {
+        LOG.info("Received get Identity request.");
+        String username = (String)e.getValue("username");
+        DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
+        Boolean external = (Boolean)e.getValue("external");
+        DID did = load(username, type, external);
+        if(nonNull(did))
+            e.addData(DID.class, did);
+    }
+
+    private void verifyIdentity(Envelope e) {
+        LOG.info("Received verify DID request.");
+        String username = (String)e.getValue("username");
+        DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
+        Boolean external = (Boolean)e.getValue("external");
+        DID did = load(username, type, external);
+        e.addNVP("verified", isNull(did));
+    }
+
+    private void authenticate(Envelope e) {
+        LOG.info("Received authn request.");
+        AuthenticateDIDRequest r = (AuthenticateDIDRequest)e.getData(AuthenticateDIDRequest.class);
+        if(isNull(r)) {
+            r = new AuthenticateDIDRequest();
+            r.statusCode = AuthenticateDIDRequest.REQUEST_REQUIRED;
+            e.addNVP("authN",r);
+            return;
+        }
+        if(isNull(r.username)) {
+            r.statusCode = AuthenticateDIDRequest.USERNAME_REQUIRED;
+            return;
+        }
+        if(isNull(r.passphrase)) {
+            r.statusCode = AuthenticateDIDRequest.PASSPHRASE_REQUIRED;
+            return;
+        }
+        if(isNull(r.type)) {
+            r.type = DID.Type.IDENTITY;
+        }
+        DID did = load(r.username, r.type, r.external);
+        try {
+            if(nonNull(did)
+                    && nonNull(did.getPassphraseHash())
+                    && HashUtil.verifyPasswordHash(r.passphrase, did.getPassphraseHash().getHash())) {
+                e.addData(DID.class, did);
+            } else {
+                e.addNVP("authN", false);
+            }
+        } catch (NoSuchAlgorithmException e1) {
+            LOG.warning(e1.getLocalizedMessage());
+        }
+    }
+
+    private void saveIdentity(Envelope e) {
+        LOG.info("Received save DID request.");
+        Map<String,Object> m = (Map<String,Object>)e.getData(DID.class);
+        if(isNull(m)) {
+            e.addErrorMessage("No DID to Save.");
+            return;
+        }
+        DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
+        Boolean external = (Boolean)e.getValue("external");
+        String location = null;
+        if(nonNull(e.getValue("identityLocation")))
+            location = (String)e.getValue("identityLocation");
+        DID did = new DID();
+        did.fromMap(m);
+        saveDID(did, type, location, external);
+    }
+
+    private void deleteIdentity(Envelope e) {
+        String username = (String)e.getValue("username");
+        Boolean success = identitiesDB.delete(username);
+        e.addNVP("delete-success",success.toString());
+    }
+
     /**
      * Saves DID
      * @param did DID
@@ -700,6 +724,9 @@ public class DIDService extends BaseService {
                 LOG.warning("Hashing Algorithm not supported while saving DID\n" + ex.getLocalizedMessage());
                 return false;
             }
+        }
+        if(isNull(did.getPublicKey()) || isNull(did.getPublicKey().getAddress())) {
+
         }
 
         InfoVault iv = new InfoVault();
@@ -725,23 +752,8 @@ public class DIDService extends BaseService {
             }
             for(UsbDevice yubiKey : yubiKeys) {
                 LOG.info("YubiKey:\n\tVendor Id: "+yubiKey.getUsbDeviceDescriptor().idVendor()+"\n\tProduct Id: "+yubiKey.getUsbDeviceDescriptor().idProduct());
-                yubiKey.addUsbDeviceListener(new UsbDeviceListener() {
-                    @Override
-                    public void usbDeviceDetached(UsbDeviceEvent usbDeviceEvent) {
-                        LOG.info("YubiKey Detached: "+usbDeviceEvent.toString());
-                    }
-
-                    @Override
-                    public void errorEventOccurred(UsbDeviceErrorEvent usbDeviceErrorEvent) {
-                        LOG.warning("YubiKey Error Event: "+usbDeviceErrorEvent.toString());
-                    }
-
-                    @Override
-                    public void dataEventOccurred(UsbDeviceDataEvent usbDeviceDataEvent) {
-                        LOG.info("YubiKey Data Event: "+usbDeviceDataEvent.getData());
-                    }
-                });
             }
+
         } catch (UsbException e) {
             LOG.warning(e.getLocalizedMessage());
         }
