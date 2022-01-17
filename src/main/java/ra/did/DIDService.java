@@ -705,15 +705,11 @@ public class DIDService extends BaseService {
 
     private boolean saveDID(Envelope e, DID did, DID.Type type, String location, Boolean external) {
         LOG.info("Saving DID...");
-        if(isNull(location))
-            location = getServiceDirectory()+type.name()+"/";
-        else
-            location = location + (location.endsWith("/") ? "" : "/") + type.name() + "/";
         if(isNull(did.getPublicKey()) && DID.Type.CONTACT.equals(did.getType())) {
             e.addErrorMessage("Public key required for saving contact.");
             return false;
         }
-        if((isNull(did.getPublicKey()) || isNull(did.getPublicKey().getAddress()))
+        if((isNull(did.getPublicKey()) || isNull(did.getPublicKey().getFingerprint()))
                 && (DID.Type.IDENTITY.equals(did.getType()) || DID.Type.NODE.equals(did.getType()))) {
             // Identity or Node with no public key so generate
             GenerateKeyRingCollectionsRequest req = new GenerateKeyRingCollectionsRequest();
@@ -738,6 +734,8 @@ public class DIDService extends BaseService {
                 return false;
             }
         }
+        if(isNull(location))
+            location = getServiceDirectory()+type.name()+"/";
         InfoVault iv = new InfoVault();
         iv.content = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getUsername(), false, false);
         iv.content.setLocation(location + did.getUsername()+".json");
@@ -796,6 +794,7 @@ public class DIDService extends BaseService {
             }
         } else {
             InfoVault iv = null;
+            username += ".json";
             switch (type) {
                 case NODE: iv = nodesDB.load(username);break;
                 case CONTACT: iv = contactsDB.load(username);break;
