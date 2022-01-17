@@ -1,17 +1,12 @@
 package ra.did;
 
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.openpgp.PGPException;
-import org.bouncycastle.openpgp.PGPPublicKey;
-import org.bouncycastle.openpgp.PGPPublicKeyRingCollection;
-import org.usb4java.Device;
 import ra.common.*;
 import ra.common.content.JSON;
 import ra.common.crypto.EncryptionAlgorithm;
 import ra.common.crypto.Hash;
 import ra.common.file.InfoVaultFileDB;
 import ra.common.identity.DID;
-import ra.common.identity.PublicKey;
 import ra.common.messaging.MessageProducer;
 import ra.common.messaging.TextMessage;
 import ra.common.route.Route;
@@ -22,16 +17,8 @@ import ra.common.service.ServiceStatusObserver;
 import javax.crypto.*;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import javax.smartcardio.*;
 import javax.usb.*;
-import javax.usb.event.UsbDeviceDataEvent;
-import javax.usb.event.UsbDeviceErrorEvent;
-import javax.usb.event.UsbDeviceEvent;
-import javax.usb.event.UsbDeviceListener;
-import javax.xml.bind.DatatypeConverter;
 import java.io.File;
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.util.*;
@@ -140,73 +127,12 @@ public class DIDService extends BaseService {
             case OPERATION_AUTHENTICATE: {authenticate(e);break;}
             case OPERATION_SAVE_IDENTITY: {saveIdentity(e);break;}
             case OPERATION_DELETE_IDENTITY: {deleteIdentity(e);break;}
-            case OPERATION_ADD_CONTACT: {
-                LOG.info("Received add Contact request.");
-                Boolean external = (Boolean)e.getValue("external");
-                e.addNVP("contact", saveDID((DID)e.getValue("contact"), DID.Type.CONTACT, null, external));
-                break;
-            }
-            case OPERATION_GET_CONTACT: {
-                LOG.info("Received get Contact request.");
-                String username = ((TextMessage) e.getMessage()).getText();
-                Boolean external = (Boolean)e.getValue("external");
-                DID contact = load(username, DID.Type.CONTACT, external);
-                e.addNVP("contact", contact);
-                break;
-            }
-            case OPERATION_GET_CONTACTS: {
-                LOG.info("Received get Contacts request.");
-                int start = 0;
-                int contactsNumber = 10; // default
-                if(e.getValue("contactsStart")!=null) {
-                    start = (Integer)e.getValue("contactsStart");
-                }
-                if(e.getValue("contactsNumber")!=null) {
-                    contactsNumber = (Integer)e.getValue("contactsNumber");
-                    if(contactsNumber > MAX_CONTACTS_LIST) {
-                        contactsNumber = MAX_CONTACTS_LIST; // 1000 is max
-                    }
-                }
-                List<InfoVault> infoVaults = new ArrayList<>();
-                contactsDB.loadRange(start, contactsNumber, infoVaults);
-                DID contact;
-                List<DID> contacts = new ArrayList<>();
-                for(InfoVault iv : infoVaults) {
-                    contact = new DID();
-                    contact.fromJSON(iv.content.toJSON());
-                    contacts.add(contact);
-                }
-                e.addNVP("contacts", contacts);
-                break;
-            }
-            case OPERATION_DELETE_CONTACT: {
-                LOG.info("Received delete Contact request.");
-                String fingerprint = (String)e.getValue("contactFingerprint");
-                contactsDB.delete(fingerprint);
-                break;
-            }
-            case OPERATION_HASH: {
-                HashRequest r = (HashRequest)DLC.getData(HashRequest.class,e);
-                try {
-                    if(r.generateHash)
-                        r.hash = new Hash(HashUtil.generateHash(r.contentToHash, r.hashAlgorithm.getName()), r.hashAlgorithm);
-                    if(r.generateFingerprint && r.hash != null) {
-                        r.fingerprint = new Hash(HashUtil.generateHash(r.hash.getHash(), r.hashAlgorithm.getName()), r.hashAlgorithm);
-                    }
-                } catch (NoSuchAlgorithmException e1) {
-                    r.statusCode = UNKNOWN_HASH_ALGORITHM;
-                }
-                break;
-            }
-            case OPERATION_VERIFY_HASH:{
-                VerifyHashRequest r = (VerifyHashRequest)e.getData(VerifyHashRequest.class);
-                try {
-                    r.isAMatch = HashUtil.verifyHash(r.content, r.hashToVerify.getHash(), r.hashToVerify.getAlgorithm().getName());
-                } catch (NoSuchAlgorithmException e1) {
-                    r.statusCode = UNKNOWN_HASH_ALGORITHM;
-                }
-                break;
-            }
+            case OPERATION_ADD_CONTACT: {addContact(e);break;}
+            case OPERATION_GET_CONTACT: {getContact(e);break;}
+            case OPERATION_GET_CONTACTS: {getContacts(e);break;}
+            case OPERATION_DELETE_CONTACT: {deleteContact(e);break;}
+            case OPERATION_HASH: {hash(e);break;}
+            case OPERATION_VERIFY_HASH:{verifyHash(e);break;}
             default: deadLetter(e); // Operation not supported
         }
     }
@@ -699,7 +625,7 @@ public class DIDService extends BaseService {
             location = (String)e.getValue("identityLocation");
         DID did = new DID();
         did.fromMap(m);
-        saveDID(did, type, location, external);
+        saveDID(e, did, type, location, external);
     }
 
     private void deleteIdentity(Envelope e) {
@@ -708,12 +634,99 @@ public class DIDService extends BaseService {
         e.addNVP("delete-success",success.toString());
     }
 
-    /**
-     * Saves DID
-     * @param did DID
-     */
-    private boolean saveDID(DID did, DID.Type type, String location, Boolean external) {
+    private void addContact(Envelope e) {
+        LOG.info("Received add Contact request.");
+        Boolean external = (Boolean)e.getValue("external"); // optional
+        String location = (String)e.getValue("location"); // optional
+        DID contact = (DID)e.getValue("contact");
+        e.addNVP("contact", saveDID(e, contact, DID.Type.CONTACT, location, external));
+    }
+
+    private void getContact(Envelope e) {
+        LOG.info("Received get Contact request.");
+        String username = ((TextMessage) e.getMessage()).getText();
+        Boolean external = (Boolean)e.getValue("external");
+        DID contact = load(username, DID.Type.CONTACT, external);
+        e.addNVP("contact", contact);
+    }
+
+    private void getContacts(Envelope e) {
+        LOG.info("Received get Contacts request.");
+        int start = 0;
+        int contactsNumber = 10; // default
+        if(e.getValue("contactsStart")!=null) {
+            start = (Integer)e.getValue("contactsStart");
+        }
+        if(e.getValue("contactsNumber")!=null) {
+            contactsNumber = (Integer)e.getValue("contactsNumber");
+            if(contactsNumber > MAX_CONTACTS_LIST) {
+                contactsNumber = MAX_CONTACTS_LIST; // 1000 is max
+            }
+        }
+        List<InfoVault> infoVaults = new ArrayList<>();
+        contactsDB.loadRange(start, contactsNumber, infoVaults);
+        DID contact;
+        List<DID> contacts = new ArrayList<>();
+        for(InfoVault iv : infoVaults) {
+            contact = new DID();
+            contact.fromJSON(iv.content.toJSON());
+            contacts.add(contact);
+        }
+        e.addNVP("contacts", contacts);
+    }
+
+    private void deleteContact(Envelope e) {
+        LOG.info("Received delete Contact request.");
+        String fingerprint = (String)e.getValue("contactFingerprint");
+        contactsDB.delete(fingerprint);
+    }
+
+    private void hash(Envelope e) {
+        HashRequest r = (HashRequest)e.getData(HashRequest.class);
+        try {
+            if(r.generateHash)
+                r.hash = new Hash(HashUtil.generateHash(r.contentToHash, r.hashAlgorithm.getName()), r.hashAlgorithm);
+            if(r.generateFingerprint && r.hash != null) {
+                r.fingerprint = new Hash(HashUtil.generateHash(r.hash.getHash(), r.hashAlgorithm.getName()), r.hashAlgorithm);
+            }
+        } catch (NoSuchAlgorithmException e1) {
+            r.statusCode = UNKNOWN_HASH_ALGORITHM;
+        }
+    }
+
+    private void verifyHash(Envelope e) {
+        VerifyHashRequest r = (VerifyHashRequest)e.getData(VerifyHashRequest.class);
+        try {
+            r.isAMatch = HashUtil.verifyHash(r.content, r.hashToVerify.getHash(), r.hashToVerify.getAlgorithm().getName());
+        } catch (NoSuchAlgorithmException e1) {
+            r.statusCode = UNKNOWN_HASH_ALGORITHM;
+        }
+    }
+
+    private boolean saveDID(Envelope e, DID did, DID.Type type, String location, Boolean external) {
         LOG.info("Saving DID...");
+        if(isNull(location))
+            location = getServiceDirectory()+type.name()+"/";
+        else
+            location = location + (location.endsWith("/") ? "" : "/") + type.name() + "/";
+        if(isNull(did.getPublicKey()) && DID.Type.CONTACT.equals(did.getType())) {
+            e.addErrorMessage("Public key required for saving contact.");
+            return false;
+        }
+        if((isNull(did.getPublicKey()) || isNull(did.getPublicKey().getAddress()))
+                && (DID.Type.IDENTITY.equals(did.getType()) || DID.Type.NODE.equals(did.getType()))) {
+            // Identity or Node with no public key so generate
+            GenerateKeyRingCollectionsRequest req = new GenerateKeyRingCollectionsRequest();
+            req.keyRingUsername = did.getUsername();
+            req.keyRingPassphrase = did.getPassphrase();
+            req.location = location;
+            e.addData(GenerateKeyRingCollectionsRequest.class, req);
+            generateKeyRingsCollection(e);
+            did.setPublicKey(req.identityPublicKey);
+            did.setStatus(DID.Status.ACTIVE);
+            did.setAuthenticated(true);
+            did.setVerified(true);
+        }
         if(nonNull(did.getPassphrase())) {
             LOG.info("Hashing passphrase...");
             try {
@@ -725,16 +738,9 @@ public class DIDService extends BaseService {
                 return false;
             }
         }
-        if(isNull(did.getPublicKey()) || isNull(did.getPublicKey().getAddress())) {
-
-        }
-
         InfoVault iv = new InfoVault();
         iv.content = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getUsername(), false, false);
-        if(isNull(location))
-            iv.content.setLocation(getServiceDirectory()+type.name()+"/"+did.getUsername()+".json");
-        else
-            iv.content.setLocation(location + (location.endsWith("/") ? "" : "/") + type.name() + "/" + did.getUsername()+".json");
+        iv.content.setLocation(location + did.getUsername()+".json");
         switch (type) {
             case NODE: return nodesDB.save(iv);
             case CONTACT: return contactsDB.save(iv);
@@ -771,14 +777,10 @@ public class DIDService extends BaseService {
     }
 
     public static void dump(UsbDevice device, int level) {
-        for (int i = 0; i < level; i += 1)
-            System.out.print("  ");
-        System.out.println(device);
-        if (device.isUsbHub())
-        {
+        LOG.info(device.toString());
+        if (device.isUsbHub()) {
             final UsbHub hub = (UsbHub) device;
-            for (UsbDevice child: (List<UsbDevice>) hub.getAttachedUsbDevices())
-            {
+            for (UsbDevice child: (List<UsbDevice>) hub.getAttachedUsbDevices()) {
                 dump(child, level + 1);
             }
         }
@@ -788,12 +790,7 @@ public class DIDService extends BaseService {
         DID loadedDID = new DID();
         if(nonNull(external) && Boolean.TRUE.equals(external)) {
             if(type == DID.Type.IDENTITY) {
-                try {
-                    UsbServices services = UsbHostManager.getUsbServices();
-                    dump(services.getRootUsbHub(), 0);
-                } catch (UsbException e) {
-                    LOG.warning(e.getLocalizedMessage());
-                }
+                // TODO: integrate with YubiKey
             } else {
                 return null;
             }
