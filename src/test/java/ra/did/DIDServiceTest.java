@@ -248,4 +248,21 @@ public class DIDServiceTest {
 //
 //    }
 
+    @Test
+    @Order(8)
+    public void createIdentity() {
+        DID did = new DID();
+        did.setUsername("Bob");
+        did.setPassphrase("1234");
+        Envelope e = Envelope.documentFactory();
+        e.addData(DID.class, did);
+        e.addNVP("identityType", DID.Type.IDENTITY.name());
+        e.addRoute(DIDService.class, DIDService.OPERATION_SAVE_IDENTITY);
+        service.handleDocument(e);
+        assertNotNull(did.getPublicKey());
+        assert(did.getPublicKey().isIdentityKey());
+        assertNotNull(did.getPublicKey().getAddress());
+        assertNotNull(did.getPublicKey().getFingerprint());
+    }
+
 }

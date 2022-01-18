@@ -613,9 +613,23 @@ public class DIDService extends BaseService {
 
     private void saveIdentity(Envelope e) {
         LOG.info("Received save DID request.");
-        Map<String,Object> m = (Map<String,Object>)e.getData(DID.class);
-        if(isNull(m)) {
-            e.addErrorMessage("No DID to Save.");
+        DID did = null;
+        if(isNull(e.getData(DID.class))) {
+            e.addErrorMessage("DID required as data.");
+            return;
+        }
+        if(isNull(e.getValue("identityType"))) {
+            e.addErrorMessage("identityType param required.");
+            return;
+        }
+        if(e.getData(DID.class) instanceof DID) {
+            did = (DID)e.getData(DID.class);
+        } else if(e.getData(DID.class) instanceof Map) {
+            Map<String, Object> m = (Map<String, Object>) e.getData(DID.class);
+            did = new DID();
+            did.fromMap(m);
+        } else {
+            e.addErrorMessage("Either a DID or map of a DID must be included as data.");
             return;
         }
         DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
@@ -623,9 +637,12 @@ public class DIDService extends BaseService {
         String location = null;
         if(nonNull(e.getValue("identityLocation")))
             location = (String)e.getValue("identityLocation");
-        DID did = new DID();
-        did.fromMap(m);
-        saveDID(e, did, type, location, external);
+        DID loadedDID = load(did.getUsername(), type, external);
+        if(isNull(loadedDID)) {
+            saveDID(e, did, type, location, external);
+        } else {
+            did.fromMap(loadedDID.toMap());
+        }
     }
 
     private void deleteIdentity(Envelope e) {
@@ -715,6 +732,7 @@ public class DIDService extends BaseService {
             GenerateKeyRingCollectionsRequest req = new GenerateKeyRingCollectionsRequest();
             req.keyRingUsername = did.getUsername();
             req.keyRingPassphrase = did.getPassphrase();
+            req.type = type;
             req.location = location;
             e.addData(GenerateKeyRingCollectionsRequest.class, req);
             generateKeyRingsCollection(e);
@@ -735,7 +753,13 @@ public class DIDService extends BaseService {
             }
         }
         if(isNull(location))
-            location = getServiceDirectory()+type.name()+"/";
+            location = getServiceDirectory()+"/"+type.name()+"/";
+        File locFile = new File(location);
+        if(!locFile.exists() && !locFile.mkdir()) {
+            e.addErrorMessage("Unable to create directory: "+locFile.getAbsolutePath());
+            LOG.warning("Unable to create directory: "+locFile.getAbsolutePath());
+            return false;
+        }
         InfoVault iv = new InfoVault();
         iv.content = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getUsername(), false, false);
         iv.content.setLocation(location + did.getUsername()+".json");
