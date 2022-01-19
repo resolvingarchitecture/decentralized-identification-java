@@ -14,7 +14,7 @@ public class EncryptRequest extends DIDRequest {
     public String location;
     public String keyRingUsername;
     public String keyRingPassphrase;
-    public DID.Type type;
+    public DID.DIDType didType;
     public String publicKeyAlias;
     public Content content;
     public Boolean passphraseOnly = false;

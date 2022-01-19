@@ -12,7 +12,7 @@ public class VerifySignatureRequest extends DIDRequest {
     public String keyRingUsername;
     public String keyRingPassphrase;
     public String alias;
-    public DID.Type type;
+    public DID.DIDType type;
     public byte[] contentSigned;
     public byte[] signature;
     public byte[] fingerprint;

@@ -20,7 +20,7 @@ public class GenerateKeyRingCollectionsRequest extends DIDRequest {
     // Required
     public String keyRingPassphrase;
     // Required
-    public DID.Type type;
+    public DID.DIDType didType;
 
     public int hashStrength = HASH_STRENGTH_64; // default
 

@@ -57,17 +57,17 @@ public class DIDServiceTest {
         req.keyRingUsername = username;
         req.keyRingPassphrase = passphrase;
         req.hashStrength = HASH_STRENGTH_64;
-        req.type = DID.Type.NODE;
+        req.didType = DID.DIDType.NODE;
         Envelope e = Envelope.documentFactory();
         e.addData(GenerateKeyRingCollectionsRequest.class, req);
         e.addRoute(DIDService.class.getName(), DIDService.OPERATION_GENERATE_KEY_RINGS_COLLECTIONS);
         // Ratchet route
         e.setRoute(e.getDynamicRoutingSlip().nextRoute());
-        File pkf = new File(service.getServiceDirectory()+"/"+req.type.name(), req.keyRingUsername+".pkr");
+        File pkf = new File(service.getServiceDirectory()+"/"+req.didType.name(), req.keyRingUsername+".pkr");
         if(pkf.exists()) {
             assertTrue(pkf.delete());
         }
-        File skf = new File(service.getServiceDirectory()+"/"+req.type.name(), req.keyRingUsername+".skr");
+        File skf = new File(service.getServiceDirectory()+"/"+req.didType.name(), req.keyRingUsername+".skr");
         if(skf.exists()) {
             assertTrue(skf.delete());
         }
@@ -112,7 +112,7 @@ public class DIDServiceTest {
         encReq.keyRingUsername = username;
         encReq.keyRingPassphrase = passphrase;
         encReq.publicKeyAlias = username;
-        encReq.type = DID.Type.NODE;
+        encReq.didType = DID.DIDType.NODE;
         encReq.content = new Text();
         encReq.content.setBody(content.getBytes(), false, false);
         Envelope e = Envelope.documentFactory();
@@ -135,7 +135,7 @@ public class DIDServiceTest {
         decReq.keyRingUsername = username;
         decReq.keyRingPassphrase = passphrase;
         decReq.alias = username;
-        decReq.type = DID.Type.NODE;
+        decReq.didType = DID.DIDType.NODE;
         decReq.content = encReq.content;
         Envelope e2 = Envelope.documentFactory();
         e2.addData(DecryptRequest.class, decReq);
@@ -160,7 +160,7 @@ public class DIDServiceTest {
         signRequest.keyRingPassphrase = passphrase;
         signRequest.alias = username;
         signRequest.passphrase = passphrase;
-        signRequest.type = DID.Type.NODE;
+        signRequest.didType = DID.DIDType.NODE;
         signRequest.contentToSign = content.getBytes(StandardCharsets.UTF_8);
         Envelope e = Envelope.documentFactory();
         e.addData(SignRequest.class, signRequest);
@@ -179,7 +179,7 @@ public class DIDServiceTest {
         verifySignatureRequest.keyRingUsername = username;
         verifySignatureRequest.keyRingPassphrase = passphrase;
         verifySignatureRequest.alias = username;
-        verifySignatureRequest.type = DID.Type.NODE;
+        verifySignatureRequest.type = DID.DIDType.NODE;
         verifySignatureRequest.contentSigned = content.getBytes(StandardCharsets.UTF_8);
         verifySignatureRequest.signature = signRequest.signature;
         Envelope e2 = Envelope.documentFactory();
@@ -256,7 +256,7 @@ public class DIDServiceTest {
         did.setPassphrase("1234");
         Envelope e = Envelope.documentFactory();
         e.addData(DID.class, did);
-        e.addNVP("identityType", DID.Type.IDENTITY.name());
+        e.addNVP("identityType", DID.DIDType.IDENTITY.name());
         e.addRoute(DIDService.class, DIDService.OPERATION_SAVE_IDENTITY);
         service.handleDocument(e);
         assertNotNull(did.getPublicKey());

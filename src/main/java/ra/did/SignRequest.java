@@ -14,7 +14,7 @@ public class SignRequest extends DIDRequest {
     public String location;
     public String keyRingUsername;
     public String keyRingPassphrase;
-    public DID.Type type;
+    public DID.DIDType didType;
     public byte[] contentToSign;
     public String alias;
     public String passphrase;

@@ -11,6 +11,6 @@ public class AuthenticateDIDRequest extends ServiceMessage {
 
     public String username;
     public String passphrase;
-    public DID.Type type;
+    public DID.DIDType didType;
     public Boolean external;
 }

@@ -147,7 +147,7 @@ public class DIDService extends BaseService {
             e.addData(GenerateKeyRingCollectionsRequest.class, r);
             return;
         }
-        if(isNull(r.type)) {
+        if(isNull(r.didType)) {
             LOG.warning("KeyRing DID Type required.");
             r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
             return;
@@ -155,10 +155,10 @@ public class DIDService extends BaseService {
         File f;
         if(r.location == null || r.location.isEmpty()) {
             // default
-            f = new File(getServiceDirectory(), r.type.name());
+            f = new File(getServiceDirectory(), r.didType.name());
             r.location = f.getAbsolutePath();
         } else {
-            f = new File(r.location, r.type.name());
+            f = new File(r.location, r.didType.name());
         }
         if(!f.exists() && !f.mkdir()) {
             r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_LOCATION_INACCESSIBLE;
@@ -258,7 +258,7 @@ public class DIDService extends BaseService {
             e.addData(EncryptRequest.class, r);
             return;
         }
-        if(isNull(r.type)) {
+        if(isNull(r.didType)) {
             LOG.warning("KeyRing DID Type required.");
             r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
             return;
@@ -266,10 +266,10 @@ public class DIDService extends BaseService {
         File f;
         if(r.location == null || r.location.isEmpty()) {
             // default
-            f = new File(getServiceDirectory(), r.type.name());
+            f = new File(getServiceDirectory(), r.didType.name());
             r.location = f.getAbsolutePath();
         } else {
-            f = new File(r.location, r.type.name());
+            f = new File(r.location, r.didType.name());
         }
         if(!f.exists() && !f.mkdir()) {
             r.statusCode = EncryptRequest.LOCATION_INACCESSIBLE;
@@ -305,7 +305,7 @@ public class DIDService extends BaseService {
             e.addData(DecryptRequest.class, r);
             return;
         }
-        if(isNull(r.type)) {
+        if(isNull(r.didType)) {
             LOG.warning("KeyRing DID Type required.");
             r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
             return;
@@ -313,10 +313,10 @@ public class DIDService extends BaseService {
         File f;
         if(r.location == null || r.location.isEmpty()) {
             // default
-            f = new File(getServiceDirectory(), r.type.name());
+            f = new File(getServiceDirectory(), r.didType.name());
             r.location = f.getAbsolutePath();
         } else {
-            f = new File(r.location, r.type.name());
+            f = new File(r.location, r.didType.name());
         }
         if(!f.exists() && !f.mkdir()) {
             r.statusCode = DecryptRequest.LOCATION_INACCESSIBLE;
@@ -344,7 +344,7 @@ public class DIDService extends BaseService {
             e.addData(SignRequest.class, r);
             return;
         }
-        if(isNull(r.type)) {
+        if(isNull(r.didType)) {
             LOG.warning("KeyRing DID Type required.");
             r.statusCode = GenerateKeyRingCollectionsRequest.KEY_RING_DID_TYPE_REQUIRED;
             return;
@@ -352,10 +352,10 @@ public class DIDService extends BaseService {
         File f;
         if(r.location == null || r.location.isEmpty()) {
             // default
-            f = new File(getServiceDirectory(), r.type.name());
+            f = new File(getServiceDirectory(), r.didType.name());
             r.location = f.getAbsolutePath();
         } else {
-            f = new File(r.location, r.type.name());
+            f = new File(r.location, r.didType.name());
         }
         if(!f.exists() && !f.mkdir()) {
             r.statusCode = SignRequest.LOCATION_INACCESSIBLE;
@@ -553,7 +553,7 @@ public class DIDService extends BaseService {
         LOG.info("Received get Identities request.");
         int start = 0;
         int identitiesNumber = 10; // default
-        DID.Type type = DID.Type.IDENTITY;
+        DID.DIDType type = DID.DIDType.IDENTITY;
         List<DID> identities = loadAll(type);
         e.addNVP("identities", identities);
     }
@@ -561,7 +561,7 @@ public class DIDService extends BaseService {
     private void getIdentity(Envelope e) {
         LOG.info("Received get Identity request.");
         String username = (String)e.getValue("username");
-        DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
+        DID.DIDType type = DID.DIDType.valueOf((String)e.getValue("identityType"));
         Boolean external = (Boolean)e.getValue("external");
         DID did = load(username, type, external);
         if(nonNull(did))
@@ -571,7 +571,7 @@ public class DIDService extends BaseService {
     private void verifyIdentity(Envelope e) {
         LOG.info("Received verify DID request.");
         String username = (String)e.getValue("username");
-        DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
+        DID.DIDType type = DID.DIDType.valueOf((String)e.getValue("identityType"));
         Boolean external = (Boolean)e.getValue("external");
         DID did = load(username, type, external);
         e.addNVP("verified", isNull(did));
@@ -594,10 +594,10 @@ public class DIDService extends BaseService {
             r.statusCode = AuthenticateDIDRequest.PASSPHRASE_REQUIRED;
             return;
         }
-        if(isNull(r.type)) {
-            r.type = DID.Type.IDENTITY;
+        if(isNull(r.didType)) {
+            r.didType = DID.DIDType.IDENTITY;
         }
-        DID did = load(r.username, r.type, r.external);
+        DID did = load(r.username, r.didType, r.external);
         try {
             if(nonNull(did)
                     && nonNull(did.getPassphraseHash())
@@ -632,7 +632,7 @@ public class DIDService extends BaseService {
             e.addErrorMessage("Either a DID or map of a DID must be included as data.");
             return;
         }
-        DID.Type type = DID.Type.valueOf((String)e.getValue("identityType"));
+        DID.DIDType type = DID.DIDType.valueOf((String)e.getValue("identityType"));
         Boolean external = (Boolean)e.getValue("external");
         String location = null;
         if(nonNull(e.getValue("identityLocation")))
@@ -656,14 +656,14 @@ public class DIDService extends BaseService {
         Boolean external = (Boolean)e.getValue("external"); // optional
         String location = (String)e.getValue("location"); // optional
         DID contact = (DID)e.getValue("contact");
-        e.addNVP("contact", saveDID(e, contact, DID.Type.CONTACT, location, external));
+        e.addNVP("contact", saveDID(e, contact, DID.DIDType.CONTACT, location, external));
     }
 
     private void getContact(Envelope e) {
         LOG.info("Received get Contact request.");
         String username = ((TextMessage) e.getMessage()).getText();
         Boolean external = (Boolean)e.getValue("external");
-        DID contact = load(username, DID.Type.CONTACT, external);
+        DID contact = load(username, DID.DIDType.CONTACT, external);
         e.addNVP("contact", contact);
     }
 
@@ -720,19 +720,19 @@ public class DIDService extends BaseService {
         }
     }
 
-    private boolean saveDID(Envelope e, DID did, DID.Type type, String location, Boolean external) {
+    private boolean saveDID(Envelope e, DID did, DID.DIDType didType, String location, Boolean external) {
         LOG.info("Saving DID...");
-        if(isNull(did.getPublicKey()) && DID.Type.CONTACT.equals(did.getType())) {
+        if(isNull(did.getPublicKey()) && DID.DIDType.CONTACT.equals(did.getDidType())) {
             e.addErrorMessage("Public key required for saving contact.");
             return false;
         }
         if((isNull(did.getPublicKey()) || isNull(did.getPublicKey().getFingerprint()))
-                && (DID.Type.IDENTITY.equals(did.getType()) || DID.Type.NODE.equals(did.getType()))) {
+                && (DID.DIDType.IDENTITY.equals(did.getDidType()) || DID.DIDType.NODE.equals(did.getDidType()))) {
             // Identity or Node with no public key so generate
             GenerateKeyRingCollectionsRequest req = new GenerateKeyRingCollectionsRequest();
             req.keyRingUsername = did.getUsername();
             req.keyRingPassphrase = did.getPassphrase();
-            req.type = type;
+            req.didType = didType;
             req.location = location;
             e.addData(GenerateKeyRingCollectionsRequest.class, req);
             generateKeyRingsCollection(e);
@@ -753,7 +753,7 @@ public class DIDService extends BaseService {
             }
         }
         if(isNull(location))
-            location = getServiceDirectory()+"/"+type.name()+"/";
+            location = getServiceDirectory()+"/"+didType.name()+"/";
         File locFile = new File(location);
         if(!locFile.exists() && !locFile.mkdir()) {
             e.addErrorMessage("Unable to create directory: "+locFile.getAbsolutePath());
@@ -763,7 +763,7 @@ public class DIDService extends BaseService {
         InfoVault iv = new InfoVault();
         iv.content = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getUsername(), false, false);
         iv.content.setLocation(location + did.getUsername()+".json");
-        switch (type) {
+        switch (didType) {
             case NODE: return nodesDB.save(iv);
             case CONTACT: return contactsDB.save(iv);
             case IDENTITY: return identitiesDB.save(iv);
@@ -808,15 +808,15 @@ public class DIDService extends BaseService {
         }
     }
 
-    private DID load(String username, DID.Type type, Boolean external) {
+    private DID load(String username, DID.DIDType type, Boolean external) {
         DID loadedDID = new DID();
-        if(nonNull(external) && Boolean.TRUE.equals(external)) {
-            if(type == DID.Type.IDENTITY) {
-                // TODO: integrate with YubiKey
-            } else {
-                return null;
-            }
-        } else {
+//        if(nonNull(external) && Boolean.TRUE.equals(external)) {
+//            if(type == DID.Type.IDENTITY) {
+//                // TODO: integrate with YubiKey
+//            } else {
+//                return null;
+//            }
+//        } else {
             InfoVault iv = null;
             username += ".json";
             switch (type) {
@@ -830,11 +830,11 @@ public class DIDService extends BaseService {
                 LOG.info("DID Loaded from map.");
                 return loadedDID;
             }
-        }
-        return null;
+//        }
+        return loadedDID;
     }
 
-    private List<DID> loadAll(DID.Type type) {
+    private List<DID> loadAll(DID.DIDType type) {
         List<DID> loadedDIDs = new ArrayList<>();
         List<InfoVault> infoVaults = new ArrayList<>();
         DID did;
@@ -854,7 +854,7 @@ public class DIDService extends BaseService {
         return loadedDIDs;
     }
 
-    private List<DID> loadRange(int begin, int numberEntries, DID.Type type) {
+    private List<DID> loadRange(int begin, int numberEntries, DID.DIDType type) {
         List<DID> loadedDIDs = new ArrayList<>();
         List<InfoVault> infoVaults = new ArrayList<>();
         DID did;
@@ -908,11 +908,11 @@ public class DIDService extends BaseService {
         loadKeyRingImplementations();
         // TODO: Support external drives (InfoVault)
         nodesDB = new InfoVaultFileDB();
-        nodesDB.setBaseURL(new File(getServiceDirectory(),DID.Type.NODE.name()).getAbsolutePath());
+        nodesDB.setBaseURL(new File(getServiceDirectory(),DID.DIDType.NODE.name()).getAbsolutePath());
         identitiesDB = new InfoVaultFileDB();
-        identitiesDB.setBaseURL(new File(getServiceDirectory(),DID.Type.IDENTITY.name()).getAbsolutePath());
+        identitiesDB.setBaseURL(new File(getServiceDirectory(),DID.DIDType.IDENTITY.name()).getAbsolutePath());
         contactsDB = new InfoVaultFileDB();
-        contactsDB.setBaseURL(new File(getServiceDirectory(),DID.Type.CONTACT.name()).getAbsolutePath());
+        contactsDB.setBaseURL(new File(getServiceDirectory(),DID.DIDType.CONTACT.name()).getAbsolutePath());
         loadYubiKeys();
         updateStatus(ServiceStatus.RUNNING);
         LOG.info("Started.");
