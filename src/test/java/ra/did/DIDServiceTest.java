@@ -254,6 +254,7 @@ public class DIDServiceTest {
         DID did = new DID();
         did.setUsername("Bob");
         did.setPassphrase("1234");
+        did.setDidType(DID.DIDType.IDENTITY);
         Envelope e = Envelope.documentFactory();
         e.addData(DID.class, did);
         e.addNVP("identityType", DID.DIDType.IDENTITY.name());

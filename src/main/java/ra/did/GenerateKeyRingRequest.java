@@ -17,7 +17,7 @@ public class GenerateKeyRingRequest extends DIDRequest {
     public String location;
     public String keyRingUsername;
     public String keyRingPassphrase;
-    public DID.Type type;
+    public DID.DIDType type;
     public String alias;
     public String aliasPassphrase;
     public int hashStrength = HASH_STRENGTH_64;

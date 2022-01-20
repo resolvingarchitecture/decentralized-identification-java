@@ -618,10 +618,6 @@ public class DIDService extends BaseService {
             e.addErrorMessage("DID required as data.");
             return;
         }
-        if(isNull(e.getValue("identityType"))) {
-            e.addErrorMessage("identityType param required.");
-            return;
-        }
         if(e.getData(DID.class) instanceof DID) {
             did = (DID)e.getData(DID.class);
         } else if(e.getData(DID.class) instanceof Map) {
@@ -632,14 +628,17 @@ public class DIDService extends BaseService {
             e.addErrorMessage("Either a DID or map of a DID must be included as data.");
             return;
         }
-        DID.DIDType type = DID.DIDType.valueOf((String)e.getValue("identityType"));
+        if(isNull(did.getDidType())) {
+            e.addErrorMessage("DID type required.");
+            return;
+        }
         Boolean external = (Boolean)e.getValue("external");
         String location = null;
         if(nonNull(e.getValue("identityLocation")))
             location = (String)e.getValue("identityLocation");
-        DID loadedDID = load(did.getUsername(), type, external);
+        DID loadedDID = load(did.getUsername(), did.getDidType(), external);
         if(isNull(loadedDID)) {
-            saveDID(e, did, type, location, external);
+            saveDID(e, did, location, external);
         } else {
             did.fromMap(loadedDID.toMap());
         }
@@ -656,7 +655,7 @@ public class DIDService extends BaseService {
         Boolean external = (Boolean)e.getValue("external"); // optional
         String location = (String)e.getValue("location"); // optional
         DID contact = (DID)e.getValue("contact");
-        e.addNVP("contact", saveDID(e, contact, DID.DIDType.CONTACT, location, external));
+        e.addNVP("contact", saveDID(e, contact, location, external));
     }
 
     private void getContact(Envelope e) {
@@ -694,8 +693,8 @@ public class DIDService extends BaseService {
 
     private void deleteContact(Envelope e) {
         LOG.info("Received delete Contact request.");
-        String fingerprint = (String)e.getValue("contactFingerprint");
-        contactsDB.delete(fingerprint);
+        String username = (String)e.getValue("contactUsername");
+        contactsDB.delete(username);
     }
 
     private void hash(Envelope e) {
@@ -720,8 +719,21 @@ public class DIDService extends BaseService {
         }
     }
 
-    private boolean saveDID(Envelope e, DID did, DID.DIDType didType, String location, Boolean external) {
+    private boolean saveDID(Envelope e, DID did, String location, Boolean external) {
         LOG.info("Saving DID...");
+        if(isNull(did.getUsername())) {
+            e.addErrorMessage("DID username required.");
+            return false;
+        }
+        if(isNull(did.getDidType())) {
+            e.addErrorMessage("DID type required.");
+            return false;
+        }
+        DID loadedDid = load(did.getUsername(), did.getDidType(), external);
+        if(nonNull(loadedDid)) {
+            e.addErrorMessage("DID already exists.");
+            return false;
+        }
         if(isNull(did.getPublicKey()) && DID.DIDType.CONTACT.equals(did.getDidType())) {
             e.addErrorMessage("Public key required for saving contact.");
             return false;
@@ -732,7 +744,7 @@ public class DIDService extends BaseService {
             GenerateKeyRingCollectionsRequest req = new GenerateKeyRingCollectionsRequest();
             req.keyRingUsername = did.getUsername();
             req.keyRingPassphrase = did.getPassphrase();
-            req.didType = didType;
+            req.didType = did.getDidType();
             req.location = location;
             e.addData(GenerateKeyRingCollectionsRequest.class, req);
             generateKeyRingsCollection(e);
@@ -753,7 +765,7 @@ public class DIDService extends BaseService {
             }
         }
         if(isNull(location))
-            location = getServiceDirectory()+"/"+didType.name()+"/";
+            location = getServiceDirectory()+"/"+did.getDidType().name()+"/";
         File locFile = new File(location);
         if(!locFile.exists() && !locFile.mkdir()) {
             e.addErrorMessage("Unable to create directory: "+locFile.getAbsolutePath());
@@ -763,7 +775,7 @@ public class DIDService extends BaseService {
         InfoVault iv = new InfoVault();
         iv.content = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getUsername(), false, false);
         iv.content.setLocation(location + did.getUsername()+".json");
-        switch (didType) {
+        switch (did.getDidType()) {
             case NODE: return nodesDB.save(iv);
             case CONTACT: return contactsDB.save(iv);
             case IDENTITY: return identitiesDB.save(iv);
@@ -809,7 +821,7 @@ public class DIDService extends BaseService {
     }
 
     private DID load(String username, DID.DIDType type, Boolean external) {
-        DID loadedDID = new DID();
+        DID loadedDID = null;
 //        if(nonNull(external) && Boolean.TRUE.equals(external)) {
 //            if(type == DID.Type.IDENTITY) {
 //                // TODO: integrate with YubiKey
@@ -825,6 +837,7 @@ public class DIDService extends BaseService {
                 case IDENTITY: iv = identitiesDB.load(username);break;
             }
             if(nonNull(iv)) {
+                loadedDID = new DID();
                 loadedDID.fromMap(iv.content.toMap());
                 LOG.info("JSON loaded: " + iv.content.toJSON());
                 LOG.info("DID Loaded from map.");
