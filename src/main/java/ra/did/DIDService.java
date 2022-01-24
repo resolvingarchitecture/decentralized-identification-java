@@ -774,7 +774,7 @@ public class DIDService extends BaseService {
         }
         InfoVault iv = new InfoVault();
         iv.content = new JSON(did.toJSON().getBytes(), DID.class.getName(), did.getUsername(), false, false);
-        iv.content.setLocation(location + did.getUsername()+".json");
+        iv.content.setLocation(new File(location, did.getUsername()+".json").getAbsolutePath());
         switch (did.getDidType()) {
             case NODE: return nodesDB.save(iv);
             case CONTACT: return contactsDB.save(iv);
