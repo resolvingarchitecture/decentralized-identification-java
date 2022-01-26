@@ -4,6 +4,7 @@ import org.junit.jupiter.api.*;
 import ra.common.Envelope;
 import ra.common.content.Text;
 import ra.common.identity.DID;
+import ra.common.identity.PublicKey;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -264,6 +265,15 @@ public class DIDServiceTest {
         assert(did.getPublicKey().isIdentityKey());
         assertNotNull(did.getPublicKey().getAddress());
         assertNotNull(did.getPublicKey().getFingerprint());
+    }
+
+    @Test
+    @Order(9)
+    public void createContact() {
+        DID did = new DID();
+        did.setUsername("Charlie");
+        did.setDidType(DID.DIDType.CONTACT);
+
     }
 
 }

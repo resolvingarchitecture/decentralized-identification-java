@@ -24,6 +24,8 @@ public class GenerateKeyRingCollectionsRequest extends DIDRequest {
 
     public int hashStrength = HASH_STRENGTH_64; // default
 
+    public boolean persist = true;
+
     // Response is publicKey associated with key ring username (default)
     public PublicKey identityPublicKey;
     public PublicKey encryptionPublicKey;

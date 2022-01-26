@@ -22,8 +22,6 @@ import java.security.SecureRandom;
 import java.util.*;
 import java.util.logging.Logger;
 
-import static ra.did.HashStrength.HASH_STRENGTH_64;
-
 public class OpenPGPKeyRing implements KeyRing {
 
     private static final Logger LOG = Logger.getLogger(OpenPGPKeyRing.class.getName());
@@ -97,14 +95,16 @@ public class OpenPGPKeyRing implements KeyRing {
                 List<PGPSecretKeyRing> pgpSecretKeyRings = new ArrayList<>();
                 pgpSecretKeyRings.add(secretKeyRing);
                 secretKeyRingCollection = new PGPSecretKeyRingCollection(pgpSecretKeyRings);
-                saveSecretKeyRingCollection(secretKeyRingCollection, skr);
+                if(r.persist)
+                    saveSecretKeyRingCollection(secretKeyRingCollection, skr);
 
                 // Create and save the Public Key Ring
                 PGPPublicKeyRing publicKeyRing = krgen.generatePublicKeyRing();
                 List<PGPPublicKeyRing> pgpPublicKeyRings = new ArrayList<>();
                 pgpPublicKeyRings.add(publicKeyRing);
                 publicKeyRingCollection = new PGPPublicKeyRingCollection(pgpPublicKeyRings);
-                savePublicKeyRingCollection(publicKeyRingCollection, pkr);
+                if(r.persist)
+                    savePublicKeyRingCollection(publicKeyRingCollection, pkr);
 
                 // Now get the identity public key
                 PGPPublicKey identityPublicKey = getPublicKey(publicKeyRingCollection, r.keyRingUsername, true);
