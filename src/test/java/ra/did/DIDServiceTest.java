@@ -267,13 +267,13 @@ public class DIDServiceTest {
         assertNotNull(did.getPublicKey().getFingerprint());
     }
 
-    @Test
-    @Order(9)
-    public void createContact() {
-        DID did = new DID();
-        did.setUsername("Charlie");
-        did.setDidType(DID.DIDType.CONTACT);
-
-    }
+//    @Test
+//    @Order(9)
+//    public void createContact() {
+//        DID did = new DID();
+//        did.setUsername("Charlie");
+//        did.setDidType(DID.DIDType.CONTACT);
+//
+//    }
 
 }
